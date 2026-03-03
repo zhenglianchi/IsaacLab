@@ -22,7 +22,7 @@ import isaaclab.sim as sim_utils
 from isaaclab.scene import InteractiveScene
 from isaaclab.sim import SimulationContext
 from SceneCfg import NewRobotsSceneCfg, add_fixed_joint, scene_reset
-from ur5_controller import UR5Controller
+from pose_controller import UR5Controller
 
 
 def run_simulator(sim, scene, ur5_ctrl):
@@ -67,6 +67,6 @@ def main():
     run_simulator(sim, scene, ur5_ctrl)
 
 
-if __name__ == "__main__":
+'''if __name__ == "__main__":
     main()
-    simulation_app.close()
+    simulation_app.close()'''

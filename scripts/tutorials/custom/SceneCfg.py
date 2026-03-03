@@ -8,9 +8,7 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from pxr import UsdPhysics, Gf
 from isaaclab.assets import RigidObjectCfg  # <-- changed from ArticulationCfg
-from isaaclab.markers import VisualizationMarkers
-from isaaclab.markers.config import FRAME_MARKER_CFG
-
+from isaaclab.sensors import ContactSensorCfg
 # =====================================================
 # Quaternion Utils
 # =====================================================
@@ -159,6 +157,8 @@ DOFBOT_CONFIG = ArticulationCfg(
             velocity_limit_sim=1,
             stiffness=800,
             damping=40,
+            #stiffness=0,
+            #damping=0,
         ),
 
         "shoulder_lift_joint": ImplicitActuatorCfg(
@@ -202,8 +202,6 @@ DOFBOT_CONFIG = ArticulationCfg(
         ),
     },
 )
-
-
 # =====================================================
 # Scene
 # =====================================================
@@ -234,6 +232,27 @@ class NewRobotsSceneCfg(InteractiveSceneCfg):
     Ground = GROUND_CFG.replace(prim_path="{ENV_REGEX_NS}/Ground")
 
     Bridge = BRIDGE_CFG.replace(prim_path="{ENV_REGEX_NS}/Bridge")
+
+    Wall = AssetBaseCfg(
+        prim_path="{ENV_REGEX_NS}/Wall",
+        spawn=sim_utils.CuboidCfg(
+            size=(2.0, 1.5, 0.01),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0), opacity=0.1),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
+            activate_contact_sensors=True,
+        ),
+        init_state=AssetBaseCfg.InitialStateCfg(
+            pos=(0.6 + 0.085, 0.0, 0.3), rot=(0.9238795325, 0.0, -0.3826834324, 0.0)
+        ),
+    )
+
+    contact_forces = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Wall",
+        update_period=0.0,
+        history_length=2,
+        debug_vis=False,
+    )
 
 
 
