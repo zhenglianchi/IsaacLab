@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- This URDF was automatically created by SolidWorks to URDF Exporter! Originally created by Stephen Brawner (brawner@gmail.com) 
+     Commit Version: 1.6.0-4-g7f85cfe  Build Version: 1.6.7995.38578
+     For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
+<robot
+  name="ground">
+  <link
+    name="base_link">
+    <inertial>
+      <origin
+        xyz="-0.040201 0.0012273 0.0096292"
+        rpy="0 0 0" />
+      <mass
+        value="0.76503" />
+      <inertia
+        ixx="0.00508"
+        ixy="-8.7544E-06"
+        ixz="-3.43E-06"
+        iyy="0.0044319"
+        iyz="-1.8262E-06"
+        izz="0.0094591" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://ground/meshes/base_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.77647 0.75686 0.73725 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://ground/meshes/base_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+</robot>
