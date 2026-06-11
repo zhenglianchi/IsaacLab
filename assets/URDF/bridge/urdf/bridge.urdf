@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- This URDF was automatically created by SolidWorks to URDF Exporter! Originally created by Stephen Brawner (brawner@gmail.com) 
+     Commit Version: 1.6.0-4-g7f85cfe  Build Version: 1.6.7995.38578
+     For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
+<robot
+  name="bridge">
+  <link
+    name="base_link">
+    <inertial>
+      <origin
+        xyz="5.4551E-05 0.00014985 0.032699"
+        rpy="0 0 0" />
+      <mass
+        value="0.13288" />
+      <inertia
+        ixx="0.00010156"
+        ixy="9.8409E-08"
+        ixz="-9.2967E-08"
+        iyy="0.00010179"
+        iyz="-2.5537E-07"
+        izz="7.2464E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://bridge/meshes/base_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.94118 0.67451 0.11765 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://bridge/meshes/base_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+</robot>

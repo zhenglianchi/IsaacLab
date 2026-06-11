@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- This URDF was automatically created by SolidWorks to URDF Exporter! Originally created by Stephen Brawner (brawner@gmail.com) 
+     Commit Version: 1.6.0-4-g7f85cfe  Build Version: 1.6.7995.38578
+     For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
+<robot
+  name="grasp_based">
+  <link
+    name="base_link">
+    <inertial>
+      <origin
+        xyz="4.6829E-09 -5.196E-09 -0.024212"
+        rpy="0 0 0" />
+      <mass
+        value="0.044918" />
+      <inertia
+        ixx="1.7092E-05"
+        ixy="-3.6232E-13"
+        ixz="-1.2567E-12"
+        iyy="1.0056E-05"
+        iyz="1.3594E-12"
+        izz="1.8428E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://grasp_based/meshes/base_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://grasp_based/meshes/base_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+</robot>
