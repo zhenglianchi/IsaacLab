@@ -7,8 +7,9 @@
 
 Scene matches force1_SceneCfg.NewRobotsSceneCfg:
   UR5(Dofbot) → Bridge → SixForce → Gripper → ORU  +  Ground
-All assets loaded by InteractiveScene; FixedJoints created on template env_0
-before clone (so cloning replicates them).
+All assets loaded by InteractiveScene (cloning + physics replication done).
+FixedJoints created on env_0 only BEFORE sim.play() — replicate_physics=True
+shares them to all other environments.
 """
 
 from __future__ import annotations
@@ -41,17 +42,20 @@ class OruEnv(DirectRLEnv):
         cfg.state_space = sum(STATE_DIM_CFG[k] for k in cfg.state_order) + cfg.action_space
 
         super().__init__(cfg, render_mode, **kwargs)
-        # super().__init__ → InteractiveScene(cfg.scene) → _setup_scene → clone
+        # super().__init__ → InteractiveScene(clone) → _setup_scene(FixedJoints)
         self._init_tensors()
 
     # ==================================================================
-    # Setup Scene — FixedJoints on env_0 BEFORE clone
+    # Setup Scene — FixedJoints on env_0 (shared via replicate_physics)
     # ==================================================================
 
     def _setup_scene(self):
         """Assets already loaded by InteractiveScene(cfg.scene).
 
-        Create FixedJoints on template env_0, then clone will replicate them.
+        Cloning + physics replication already happened inside InteractiveScene.__init__.
+        With replicate_physics=True, only env_0 has real physics — all other envs
+        are virtual projections. FixedJoints must be created on env_0's USD prim
+        BEFORE sim.play() so PhysX picks them up and shares them to all envs.
         """
         # Grab asset handles (loaded by InteractiveScene from OruSceneCfg)
         self.robot: Articulation = self.scene["Dofbot"]
@@ -61,11 +65,9 @@ class OruEnv(DirectRLEnv):
         self.oru: RigidObject = self.scene["ORU"]
         self.ground: RigidObject = self.scene["Ground"]
 
-        # Create FixedJoints on env_0 ONLY — cloning will replicate to env_1…env_N
+        # FixedJoints on env_0 only — replicate_physics=True shares them to all envs
         stage = sim_utils.SimulationContext.instance().stage
-        _create_fixed_joints_for_env(stage, 0)
-
-        # Done — DirectRLEnv will call clone_environments after this
+        _create_fixed_joints(stage, 0)
 
     # ==================================================================
     # Tensors
@@ -184,10 +186,10 @@ class OruEnv(DirectRLEnv):
         rot_actions = self.actions[:, 3:6] * self.rot_threshold
 
         ctrl_target_ee_pos = self.ee_pos + pos_actions
-        ground_pos = self.ground.data.root_pos_w - self.scene.env_origins
-        delta = ctrl_target_ee_pos - ground_pos
+        ground_pos_w = self.ground.data.root_pos_w
+        delta = ctrl_target_ee_pos - ground_pos_w
         bounds = torch.tensor(self.cfg.task.ee_pos_action_bounds, device=self.device)
-        ctrl_target_ee_pos = ground_pos + torch.clamp(delta, -bounds, bounds)
+        ctrl_target_ee_pos = ground_pos_w + torch.clamp(delta, -bounds, bounds)
 
         angle = torch.norm(rot_actions, p=2, dim=-1)
         axis = rot_actions / (angle.unsqueeze(-1) + 1e-8)
@@ -232,7 +234,7 @@ class OruEnv(DirectRLEnv):
     def _get_observations(self) -> dict:
         self._compute_intermediate_values(self.physics_dt)
 
-        ground_pos = self.ground.data.root_pos_w - self.scene.env_origins
+        ground_pos = self.ground.data.root_pos_w
         ground_quat = self.ground.data.root_quat_w
 
         obs_dict = {
@@ -276,7 +278,7 @@ class OruEnv(DirectRLEnv):
         return w
 
     def _ground_top(self) -> torch.Tensor:
-        ground_pos = self.ground.data.root_pos_w - self.scene.env_origins
+        ground_pos = self.ground.data.root_pos_w
         local = torch.zeros((self.num_envs, 3), device=self.device)
         local[:, 2] = self.GROUND_H
         id_q = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
@@ -375,13 +377,13 @@ class OruEnv(DirectRLEnv):
             env_ids=env_ids,
         )
 
-        # Ground randomisation
-        gs = self.ground.data.default_root_state[env_ids].clone()
-        noise = (torch.rand((len(env_ids), 3), device=self.device) - 0.5) * 2 * 0.05
-        gs[:, :3] = torch.tensor([0.4, 0.0, 0.05], device=self.device) + noise
-        gs[:, :3] += self.scene.env_origins[env_ids]
-        gs[:, 7:] = 0.0
-        self.ground.write_root_pose_to_sim(gs[:, :7], env_ids=env_ids)
+        # Ground randomisation (disabled for debugging)
+        # gs = self.ground.data.default_root_state[env_ids].clone()
+        # noise = (torch.rand((len(env_ids), 3), device=self.device) - 0.5) * 2 * 0.05
+        # gs[:, :3] = torch.tensor([0.4, 0.0, 0.05], device=self.device) + noise
+        # gs[:, :3] += self.scene.env_origins[env_ids]
+        # gs[:, 7:] = 0.0
+        # self.ground.write_root_pose_to_sim(gs[:, :7], env_ids=env_ids)
 
         # Note: Bridge/SixForce/Gripper/ORU are connected via FixedJoints
         # to the UR5 articulation — their poses are driven by the UR5,
@@ -404,10 +406,15 @@ class OruEnv(DirectRLEnv):
 
 
 # ==================================================================
-# Fixed joint helper — identical to force1_SceneCfg.add_fixed_joint
+# Fixed joint helper — env_0 only (replicate_physics=True shares to all)
 # ==================================================================
 
-def _create_fixed_joints_for_env(stage, env_idx: int):
+def _create_fixed_joints(stage, env_idx: int):
+    """Create a single FixedJoint chain on one environment.
+
+    With replicate_physics=True, only env_0 gets real physics — all other
+    environments are virtual projections, so joints on env_0 are shared.
+    """
     ns = f"/World/envs/env_{env_idx}"
     ou = oru_utils
 
