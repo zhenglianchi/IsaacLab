@@ -5,11 +5,16 @@
 
 """ORU Assembly environment — UR5 + impedance control for insertion.
 
-Scene matches force1_SceneCfg.NewRobotsSceneCfg:
-  UR5(Dofbot) → Bridge → SixForce → Gripper → ORU  +  Ground
-All assets loaded by InteractiveScene (cloning + physics replication done).
-FixedJoints created on env_0 only BEFORE sim.play() — replicate_physics=True
-shares them to all other environments.
+Scene: UR5(Dofbot) → Bridge → SixForce → Gripper → ORU  +  Ground
+clone_in_fabric=False → each env is independent (own USD + physics).
+
+Domain randomization (reset-time):
+  1. Set UR5 to default joints → read default EE pose via FK
+  2. Add random offset (pos + rot) to that EE pose
+  3. DLS IK → joint angles for perturbed EE pose
+  4. Write those joints as the initial state
+  → Target pose is FIXED ([0.4, 0, 0, 0, 0, 1, 0])
+  → Policy learns to reach the same target from randomized starting configs
 """
 
 from __future__ import annotations
@@ -23,6 +28,9 @@ import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation, RigidObject
 from isaaclab.envs import DirectRLEnv
 from isaaclab.utils.math import axis_angle_from_quat
+
+from isaaclab.controllers import DifferentialIKController, DifferentialIKControllerCfg
+from isaaclab.utils.math import subtract_frame_transforms
 
 from . import oru_control, oru_utils
 from .oru_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG, OruEnvCfg
@@ -52,10 +60,9 @@ class OruEnv(DirectRLEnv):
     def _setup_scene(self):
         """Assets already loaded by InteractiveScene(cfg.scene).
 
-        Cloning + physics replication already happened inside InteractiveScene.__init__.
-        With replicate_physics=True, only env_0 has real physics — all other envs
-        are virtual projections. FixedJoints must be created on env_0's USD prim
-        BEFORE sim.play() so PhysX picks them up and shares them to all envs.
+        clone_in_fabric=False means each environment is a fully independent
+        USD branch — no fabric sharing, no physics replication. FixedJoints
+        MUST be created on EVERY environment before sim.play().
         """
         # Grab asset handles (loaded by InteractiveScene from OruSceneCfg)
         self.robot: Articulation = self.scene["Dofbot"]
@@ -65,9 +72,10 @@ class OruEnv(DirectRLEnv):
         self.oru: RigidObject = self.scene["ORU"]
         self.ground: RigidObject = self.scene["Ground"]
 
-        # FixedJoints on env_0 only — replicate_physics=True shares them to all envs
+        # FixedJoints on ALL envs — each env is independent (clone_in_fabric=False)
         stage = sim_utils.SimulationContext.instance().stage
-        _create_fixed_joints(stage, 0)
+        for env_idx in range(self.scene.cfg.num_envs):
+            _create_fixed_joints(stage, env_idx)
 
     # ==================================================================
     # Tensors
@@ -93,17 +101,27 @@ class OruEnv(DirectRLEnv):
         self.prev_actions = torch.zeros_like(self.actions)
 
         prop = self.cfg.task.default_task_prop_gains
-        self.task_prop_gains = torch.tensor(prop, device=self.device).repeat(N, 1)
+        self.base_gains = torch.tensor(prop, device=self.device).repeat(N, 1)
+        self.task_prop_gains = self.base_gains.clone()
         self.task_deriv_gains = oru_utils.get_deriv_gains(
             self.task_prop_gains, self.cfg.task.rot_deriv_scale
         )
+        self.gain_range = self.cfg.task.gain_range
 
-        self.pos_threshold = torch.tensor(
-            self.cfg.pos_action_threshold, device=self.device
-        ).repeat(N, 1)
-        self.rot_threshold = torch.tensor(
-            self.cfg.rot_action_threshold, device=self.device
-        ).repeat(N, 1)
+        # Kept for state dict compatibility (not used in _apply_action)
+        self.pos_threshold = torch.zeros((N, 3), device=self.device)
+        self.rot_threshold = torch.zeros((N, 3), device=self.device)
+
+        # IK controller — used only at reset time for domain randomization
+        ik_cfg = DifferentialIKControllerCfg(
+            command_type="pose", ik_method="dls", use_relative_mode=False,
+        )
+        self._ik = DifferentialIKController(ik_cfg, N, device=self.device)
+
+        # Fixed target: XY follows ground, Z=0.4, quat=[0,0,1,0]
+        tq = self.cfg.task.target_quat
+        self.fixed_target_quat = torch.tensor(tq, device=self.device).repeat(N, 1)
+        self.fixed_target_z = self.cfg.task.target_pos[2]  # 0.4
 
         self.ep_succeeded = torch.zeros(N, dtype=torch.bool, device=self.device)
         self.ep_success_times = torch.zeros(N, dtype=torch.long, device=self.device)
@@ -182,31 +200,19 @@ class OruEnv(DirectRLEnv):
         if self.last_update_timestamp < self.robot._data._sim_timestamp:
             self._compute_intermediate_values(dt)
 
-        pos_actions = self.actions[:, 0:3] * self.pos_threshold
-        rot_actions = self.actions[:, 3:6] * self.rot_threshold
-
-        ctrl_target_ee_pos = self.ee_pos + pos_actions
-        ground_pos_w = self.ground.data.root_pos_w
-        delta = ctrl_target_ee_pos - ground_pos_w
-        bounds = torch.tensor(self.cfg.task.ee_pos_action_bounds, device=self.device)
-        ctrl_target_ee_pos = ground_pos_w + torch.clamp(delta, -bounds, bounds)
-
-        angle = torch.norm(rot_actions, p=2, dim=-1)
-        axis = rot_actions / (angle.unsqueeze(-1) + 1e-8)
-        rot_quat = torch_utils.quat_from_angle_axis(angle, axis)
-        rot_quat = torch.where(
-            angle.unsqueeze(-1).repeat(1, 4) > 1e-6,
-            rot_quat,
-            torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1),
+        # ── Actions are gain scaling factors: [-1,1] → Kp = base * (1 + a * range) ──
+        scale = 1.0 + self.actions[:, 0:6] * self.gain_range
+        scale = torch.clamp(scale, min=0.05, max=5.0)
+        self.task_prop_gains = self.base_gains * scale
+        self.task_deriv_gains = oru_utils.get_deriv_gains(
+            self.task_prop_gains, self.cfg.task.rot_deriv_scale,
         )
-        ctrl_target_ee_quat = torch_utils.quat_mul(rot_quat, self.ee_quat)
 
-        euler = torch.stack(torch_utils.get_euler_xyz(ctrl_target_ee_quat), dim=1)
-        euler[:, 0] = math.pi
-        euler[:, 1] = 0.0
-        ctrl_target_ee_quat = torch_utils.quat_from_euler_xyz(
-            euler[:, 0], euler[:, 1], euler[:, 2]
-        )
+        # ── Target: XY = ground XY, Z = 0.4, quat = [0,0,1,0] ──
+        ground_pos = self.ground.data.root_pos_w
+        ctrl_target_ee_pos = ground_pos.clone()
+        ctrl_target_ee_pos[:, 2] = self.fixed_target_z
+        ctrl_target_ee_quat = self.fixed_target_quat
 
         joint_torque, self.applied_wrench = oru_control.compute_dof_torque(
             cfg=self.cfg,
@@ -243,6 +249,7 @@ class OruEnv(DirectRLEnv):
             "ee_linvel": self.ee_linvel_fd,
             "ee_angvel": self.ee_angvel_fd,
             "joint_pos": self.joint_pos,
+            "task_prop_gains": self.task_prop_gains,   # policy sees its variable stiffness
         }
         state_dict = {
             **obs_dict,
@@ -361,8 +368,9 @@ class OruEnv(DirectRLEnv):
 
     def _reset_idx(self, env_ids: torch.Tensor):
         super()._reset_idx(env_ids)
+        n = len(env_ids)
 
-        # UR5 — reset root pose with env_origins offset, then joint state
+        # ── Step 1: reset UR5 root + default joints ────────────────
         root_state = self.robot.data.default_root_state[env_ids].clone()
         root_state[:, :3] += self.scene.env_origins[env_ids]
         root_state[:, 7:] = 0.0
@@ -373,24 +381,62 @@ class OruEnv(DirectRLEnv):
         jvel = torch.zeros_like(jpos)
         self.robot.write_joint_state_to_sim(jpos, jvel, env_ids=env_ids)
         self.robot.set_joint_effort_target(
-            torch.zeros((len(env_ids), self.robot.num_joints), device=self.device),
-            env_ids=env_ids,
+            torch.zeros((n, self.robot.num_joints), device=self.device), env_ids=env_ids,
         )
 
-        # Ground randomisation (disabled for debugging)
-        # gs = self.ground.data.default_root_state[env_ids].clone()
-        # noise = (torch.rand((len(env_ids), 3), device=self.device) - 0.5) * 2 * 0.05
-        # gs[:, :3] = torch.tensor([0.4, 0.0, 0.05], device=self.device) + noise
-        # gs[:, :3] += self.scene.env_origins[env_ids]
-        # gs[:, 7:] = 0.0
-        # self.ground.write_root_pose_to_sim(gs[:, :7], env_ids=env_ids)
-
-        # Note: Bridge/SixForce/Gripper/ORU are connected via FixedJoints
-        # to the UR5 articulation — their poses are driven by the UR5,
-        # so we do NOT write them manually.
-
+        # Step sim once so FK gives us the "home" EE pose
         self._step_sim_no_action()
 
+        # ── Step 2: FK → default EE pose in world frame ─────────────
+        self._ensure_frame_indices()
+        ee_pose_w = self.robot.data.body_pose_w[:, self._ee_frame_idx]
+        home_ee_pos_w = ee_pose_w[env_ids, 0:3].clone()
+        home_ee_quat_w = ee_pose_w[env_ids, 3:7].clone()
+
+        # ── Step 3: add random offset to EE pose ────────────────────
+        pos_std = torch.tensor(self.cfg.task.ik_rand_pos_noise, device=self.device)
+        rot_std = torch.tensor(self.cfg.task.ik_rand_rot_noise, device=self.device)
+
+        rand_pos = (torch.rand((n, 3), device=self.device) - 0.5) * 2 * pos_std
+        rand_rot = (torch.rand((n, 3), device=self.device) - 0.5) * 2 * rot_std
+
+        target_ee_pos_w = home_ee_pos_w + rand_pos
+
+        # Apply rotation noise as euler delta around current orientation
+        rand_quat = torch_utils.quat_from_euler_xyz(
+            rand_rot[:, 0], rand_rot[:, 1], rand_rot[:, 2],
+        )
+        target_ee_quat_w = torch_utils.quat_mul(rand_quat, home_ee_quat_w)
+
+        # ── Step 4: convert target to robot base frame (IK needs base frame) ──
+        root_pose_w = self.robot.data.root_pose_w[env_ids]
+        ee_pos_b, ee_quat_b = subtract_frame_transforms(
+            root_pose_w[:, 0:3], root_pose_w[:, 3:7],
+            target_ee_pos_w, target_ee_quat_w,
+        )
+
+        # ── Step 5: DLS IK → joint angles ───────────────────────────
+        jacobian = self.robot.root_physx_view.get_jacobians()[
+            :, self._ee_frame_idx - 1, :, :
+        ][env_ids][:, :, self._arm_joint_ids]
+        current_joints = self.robot.data.joint_pos[env_ids][:, self._arm_joint_ids]
+
+        ik_command = torch.cat([ee_pos_b, ee_quat_b], dim=1)
+        self._ik.set_command(ik_command)
+        ik_joints = self._ik.compute(ee_pos_b, ee_quat_b, jacobian, current_joints)
+
+        # ── Step 6: write IK joint angles as initial state ──────────
+        full_jpos = self.robot.data.default_joint_pos[env_ids].clone()
+        full_jpos[:, self._arm_joint_ids] = ik_joints
+        self.robot.write_joint_state_to_sim(full_jpos, jvel, env_ids=env_ids)
+        self.robot.set_joint_effort_target(
+            torch.zeros((n, self.robot.num_joints), device=self.device), env_ids=env_ids,
+        )
+
+        # ── Step 7: step sim to settle FixedJoint chain ─────────────
+        self._step_sim_no_action()
+
+        # update tracking buffers
         self._ensure_frame_indices()
         self.prev_ee_pos[env_ids] = self.robot.data.body_pos_w[:, self._ee_frame_idx][env_ids].clone()
         self.prev_ee_quat[env_ids] = self.robot.data.body_quat_w[:, self._ee_frame_idx][env_ids].clone()
@@ -412,8 +458,9 @@ class OruEnv(DirectRLEnv):
 def _create_fixed_joints(stage, env_idx: int):
     """Create a single FixedJoint chain on one environment.
 
-    With replicate_physics=True, only env_0 gets real physics — all other
-    environments are virtual projections, so joints on env_0 are shared.
+    Called for EVERY environment (clone_in_fabric=False) so each env
+    gets its own independent USD hierarchy + physics for the
+    UR5→Bridge→SixForce→Gripper→ORU FixedJoint chain.
     """
     ns = f"/World/envs/env_{env_idx}"
     ou = oru_utils

@@ -1,14 +1,19 @@
-
 import math
+import torch
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import AssetBaseCfg
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
-from pxr import UsdPhysics, Gf
-from isaaclab.assets import RigidObjectCfg  # <-- changed from ArticulationCfg
+from pxr import UsdPhysics, Gf, UsdGeom
+from isaaclab.assets import RigidObjectCfg
 from isaaclab.sensors import ContactSensorCfg
+from isaaclab.sim import schemas
+from isaaclab.sim.schemas.schemas_cfg import (
+    CollisionPropertiesCfg,
+    ConvexDecompositionPropertiesCfg,
+)
 # =====================================================
 # Quaternion Utils
 # =====================================================
@@ -63,6 +68,7 @@ FORCE_CFG = RigidObjectCfg(
             disable_gravity=True,
             max_depenetration_velocity=5.0,
         ),
+        activate_contact_sensors=True,  # 在UsdFileCfg级别启用接触传感器
     ),
     init_state=RigidObjectCfg.InitialStateCfg(
         pos=(0, 0, 0),
@@ -88,13 +94,15 @@ GRIPPER_CFG = RigidObjectCfg(
 
 ORU_CFG = RigidObjectCfg(
     spawn=sim_utils.UsdFileCfg(
-        usd_path="assets/USD/ORU1/ORU1.usd",
+        usd_path="assets/USD/o7/ORU.usd", 
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=True,
             kinematic_enabled=True,
         ),
-        collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=-0.5, rest_offset=-0.2),
-        activate_contact_sensors=True,  # 启用接触传感器
+        collision_props=sim_utils.CollisionPropertiesCfg(
+            contact_offset=0.0,
+            rest_offset=0.0,
+        ),
     ),
     init_state=RigidObjectCfg.InitialStateCfg(
         pos=(0, 0, 0),
@@ -110,7 +118,10 @@ GROUND_CFG = RigidObjectCfg(
             disable_gravity=True,
             kinematic_enabled=True,
         ),
-        collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=-0.5, rest_offset=-0.2),
+        collision_props=sim_utils.CollisionPropertiesCfg(
+            contact_offset=0.0,
+            rest_offset=0.0,
+        ),
     ),
     init_state=RigidObjectCfg.InitialStateCfg(
         pos=(0.4, 0, 0.05),
@@ -120,7 +131,7 @@ GROUND_CFG = RigidObjectCfg(
 
 
 # =====================================================
-# UR5
+# UR5 - Position Control Configuration (stiffness > 0 for PD tracking)
 # =====================================================
 
 DOFBOT_CONFIG = ArticulationCfg(
@@ -136,7 +147,7 @@ DOFBOT_CONFIG = ArticulationCfg(
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             enabled_self_collisions=True,
             solver_position_iteration_count=8,
-            solver_velocity_iteration_count=0,
+            solver_velocity_iteration_count=2,
         ),
     ),
 
@@ -144,69 +155,71 @@ DOFBOT_CONFIG = ArticulationCfg(
         joint_pos={
             "shoulder_pan_joint": 0.0,
             "shoulder_lift_joint": -math.pi / 2,
-            "elbow_joint": math.pi / 3,
-            "wrist_1_joint": -math.pi / 3,
+            "elbow_joint": math.pi / 6,
+            "wrist_1_joint": -math.pi / 6,
             "wrist_2_joint": -math.pi / 2,
-            "wrist_3_joint": 0.0,
+            "wrist_3_joint": math.pi / 2,
         },
         pos=(0, 0, 0),
     ),
 
     actuators={
+        # Position-control mode: stiffness > 0 so PhysX internal PD drives joints
+        # to the target set by set_joint_position_target (used by move_ee_to)
 
         "shoulder_pan_joint": ImplicitActuatorCfg(
             joint_names_expr=["shoulder_pan_joint"],
             effort_limit_sim=87,
-            velocity_limit_sim=1,
-            stiffness=800,
-            damping=40,
-            #stiffness=0,
-            #damping=0,
+            velocity_limit_sim=10,
+            stiffness=8000,
+            damping=200,
         ),
 
         "shoulder_lift_joint": ImplicitActuatorCfg(
             joint_names_expr=["shoulder_lift_joint"],
             effort_limit_sim=87,
-            velocity_limit_sim=1,
-            stiffness=800,
-            damping=40,
+            velocity_limit_sim=10,
+            stiffness=8000,
+            damping=200,
         ),
 
         "elbow_joint": ImplicitActuatorCfg(
             joint_names_expr=["elbow_joint"],
             effort_limit_sim=87,
-            velocity_limit_sim=1,
-            stiffness=800,
-            damping=40,
+            velocity_limit_sim=10,
+            stiffness=8000,
+            damping=200,
         ),
 
         "wrist_1_joint": ImplicitActuatorCfg(
             joint_names_expr=["wrist_1_joint"],
             effort_limit_sim=87,
-            velocity_limit_sim=1,
-            stiffness=800,
-            damping=40,
+            velocity_limit_sim=10,
+            stiffness=8000,
+            damping=200,
         ),
 
         "wrist_2_joint": ImplicitActuatorCfg(
             joint_names_expr=["wrist_2_joint"],
             effort_limit_sim=87,
-            velocity_limit_sim=1,
-            stiffness=800,
-            damping=40,
+            velocity_limit_sim=10,
+            stiffness=8000,
+            damping=200,
         ),
 
         "wrist_3_joint": ImplicitActuatorCfg(
             joint_names_expr=["wrist_3_joint"],
             effort_limit_sim=87,
-            velocity_limit_sim=1,
-            stiffness=800,
-            damping=40,
+            velocity_limit_sim=10,
+            stiffness=8000,
+            damping=200,
         ),
     },
 )
+
+
 # =====================================================
-# Scene
+# Scene - Full ORU Scene without Wall
 # =====================================================
 
 class NewRobotsSceneCfg(InteractiveSceneCfg):
@@ -236,31 +249,10 @@ class NewRobotsSceneCfg(InteractiveSceneCfg):
 
     Bridge = BRIDGE_CFG.replace(prim_path="{ENV_REGEX_NS}/Bridge")
 
-    Wall = AssetBaseCfg(
-        prim_path="{ENV_REGEX_NS}/Wall",
-        spawn=sim_utils.CuboidCfg(
-            size=(2.0, 1.5, 0.01),
-            collision_props=sim_utils.CollisionPropertiesCfg(),
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0), opacity=0.1),
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
-            activate_contact_sensors=True,
-        ),
-        init_state=AssetBaseCfg.InitialStateCfg(
-            pos=(0.6 + 0.085, 0.0, 0.3), rot=(0.9238795325, 0.0, -0.3826834324, 0.0)
-        ),
-    )
-
-    contact_forces = ContactSensorCfg(
-        prim_path="{ENV_REGEX_NS}/Wall",
-        update_period=0.0,
-        history_length=2,
-        debug_vis=False,
-    )
-
-
 
 
 def scene_reset(scene):
+
     root_Ground_state = scene["Ground"].data.default_root_state.clone()
     root_Ground_state[:, :3] += scene.env_origins
 
@@ -278,12 +270,11 @@ def scene_reset(scene):
     )
 
     scene["Dofbot"].write_joint_state_to_sim(joint_pos, joint_vel)
-    scene["Dofbot"].set_joint_position_target(joint_pos)
+    scene["Dofbot"].set_joint_effort_target(
+        torch.zeros_like(joint_pos)
+    )
 
     scene.write_data_to_sim()
-
-    scene.reset()
-
 
 
 # =====================================================
@@ -356,7 +347,7 @@ def add_fixed_joint(stage, args_cli):
 
         env_ns = f"/World/envs/env_{env_idx}"
 
-        # flange → bridge
+        # flange -> bridge
         create_fixed_joint(
             stage,
             f"{env_ns}/Dofbot/wrist_3_link/bridge_joint",
@@ -364,7 +355,7 @@ def add_fixed_joint(stage, args_cli):
             f"{env_ns}/Bridge/base_link",
         )
 
-        # bridge → force
+        # bridge -> force
         create_fixed_joint(
             stage,
             f"{env_ns}/Bridge/base_link/force_joint",
@@ -375,7 +366,7 @@ def add_fixed_joint(stage, args_cli):
             child_offset_pos=(0, 0, 0.062),
         )
 
-        # force → gripper
+        # force -> gripper
         create_fixed_joint(
             stage,
             f"{env_ns}/SixForce/base_link/gripper_joint",
@@ -386,11 +377,13 @@ def add_fixed_joint(stage, args_cli):
             child_offset_angle=math.pi,
         )
 
-        # gripper → ORU
+        # gripper -> ORU
         create_fixed_joint(
             stage,
             f"{env_ns}/Gripper/base_link/oru_joint",
             f"{env_ns}/Gripper/base_link",
             f"{env_ns}/ORU/base_link",
-            child_offset_pos=(0, 0, -0.29),
+            child_offset_pos=(0, 0, -0.257),
+            child_offset_axis=(0, 0, 1),
+            child_offset_angle=math.pi,
         )

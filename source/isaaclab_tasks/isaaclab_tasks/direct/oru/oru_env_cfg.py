@@ -33,6 +33,7 @@ OBS_DIM_CFG = {
     "ee_linvel": 3,
     "ee_angvel": 3,
     "joint_pos": 6,
+    "task_prop_gains": 6,    # policy sees its own variable stiffness
 }
 
 STATE_DIM_CFG = {
@@ -201,15 +202,20 @@ class OruSceneCfg(InteractiveSceneCfg):
 
 @configclass
 class OruEnvCfg(DirectRLEnvCfg):
-    """ORU Assembly env config."""
+    """ORU Assembly env config — variable impedance control.
+
+    Policy outputs 6D gain scaling factors in [-1,1] that modulate the
+    impedance controller's Kp gains. Target pose is FIXED.
+    """
 
     decimation: int = 8
-    action_space: int = 6
+    action_space: int = 6   # [Kp_scale_x..Kp_scale_rz] gain multipliers
     observation_space: int = 0   # computed at init
     state_space: int = 0
 
     obs_order: list = [
         "ee_pos_rel_ground", "ee_quat", "ee_linvel", "ee_angvel", "joint_pos",
+        "task_prop_gains",
     ]
     state_order: list = [
         "ee_pos_rel_ground", "ee_quat", "ee_linvel", "ee_angvel", "joint_pos",
@@ -217,11 +223,9 @@ class OruEnvCfg(DirectRLEnvCfg):
     ]
 
     task: OruTaskCfg = OruTaskCfg()
-    episode_length_s: float = 15.0
+    episode_length_s: float = 40.0
 
     ema_factor: float = 0.2
-    pos_action_threshold: tuple = (0.02, 0.02, 0.02)
-    rot_action_threshold: tuple = (0.097, 0.097, 0.097)
 
     sim: SimulationCfg = SimulationCfg(
         device="cuda:0",
@@ -244,9 +248,12 @@ class OruEnvCfg(DirectRLEnvCfg):
         ),
     )
 
-    # All assets inside the scene config — loaded together by InteractiveScene
+    # clone_in_fabric=False is REQUIRED because FixedJoints connect RigidObjects
+    # to the UR5 articulation. With fabric cloning + replicate_physics, the USD
+    # visual hierarchy (FixedJoint prims) only exists on env_0, so RigidObjects
+    # in other envs render at incorrect positions. Each env must be independent.
     scene: OruSceneCfg = OruSceneCfg(
-        num_envs=8, env_spacing=2.0, clone_in_fabric=True,
+        num_envs=16, env_spacing=2.0, clone_in_fabric=False,
     )
 
 

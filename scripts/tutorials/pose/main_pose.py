@@ -35,34 +35,28 @@ def run_simulator(sim, scene, ur5_ctrl, ee_target_set, sim_dt):
     while simulation_app.is_running():
         # reset every 1500 steps
         if count % 1500 == 0:
-            # reset counters
             count = 0
             scene_reset(scene)
-            # reset joint state to default
-            default_joint_pos = ur5_ctrl.robot.data.default_joint_pos.clone()
-            default_joint_vel = ur5_ctrl.robot.data.default_joint_vel.clone()
-            ur5_ctrl.robot.write_joint_state_to_sim(default_joint_pos, default_joint_vel)
-            ur5_ctrl.robot.write_data_to_sim()
-            ur5_ctrl.robot.reset()
-            scene.reset()
-            # reset target pose
+
+            # update robot buffers after reset
             ur5_ctrl.robot.update(sim_dt)
+
             current_goal_idx = (current_goal_idx + 1) % len(ee_target_set)
             print(f"Moving to target {current_goal_idx}: {ee_target_set[current_goal_idx]}")
-        
+
         # Get current target
         target_pos = ee_target_set[current_goal_idx][:, :3]
         target_quat = ee_target_set[current_goal_idx][:, 3:7]
-        
+
         # Move end-effector to target position using position control
         ur5_ctrl.move_ee_to(target_pos, target_quat)
-        
+
         count += 1
 
 
 def main():
     """Main function."""
-    # Initialize the simulation context with physics settings matching force
+    # Initialize the simulation context
     sim_cfg = sim_utils.SimulationCfg(
         device=args_cli.device,
         physx=sim_utils.PhysxCfg(
@@ -73,12 +67,11 @@ def main():
     )
     sim = sim_utils.SimulationContext(sim_cfg)
     sim.set_camera_view([3.5, 0.0, 3.2], [0.0, 0.0, 0.5])
-    
-    # Design scene - use the same configuration as force
+
+    # Design scene
     scene_cfg = NewRobotsSceneCfg(args_cli.num_envs, env_spacing=2.0)
     scene = InteractiveScene(scene_cfg)
 
-    # Now we are ready!
     sim = SimulationContext.instance()
     stage = sim.stage
 
@@ -87,10 +80,10 @@ def main():
     # Play the simulator
     sim.reset()
     scene.reset()
-    
-    # Initialize controller
-    ur5_ctrl = UR5Controller(scene, args_cli)
-    
+
+    # Initialize controller (pass sim explicitly for physics stepping)
+    ur5_ctrl = UR5Controller(scene, sim, args_cli)
+
     # ==========================================================
     # 目标位置设置为Ground中心坐标（与main_force.py一致）
     # ==========================================================
@@ -99,11 +92,11 @@ def main():
     ground_quat = scene["Ground"].data.root_quat_w[0].cpu().numpy()
     print(f"Ground position: {ground_pos}")
     print(f"Ground quaternion: {ground_quat}")
-    
+
     # 目标位置：Ground中心上方不同高度
     target_pos = ground_pos.copy()
     target_quat = ground_quat.copy()
-    
+
     # 定义绕 Z 轴 180° 的旋转四元数 (wxyz 格式)
     # 180° = π rad，cos(π/2)=0, sin(π/2)=1，绕 Z 轴为 [w, x, y, z] = [0, 0, 0, 1]
     quat_z_180 = np.array([0.0, 0.0, 0.0, 1.0])
@@ -123,26 +116,25 @@ def main():
     # 计算旋转后的四元数（全局 Z 轴旋转 180°）
     rotated_quat = quat_multiply(quat_z_180, target_quat)
     rotated_quat = rotated_quat / np.linalg.norm(rotated_quat)  # 归一化
-    
+
     # 定义目标位姿序列（与main_force.py相同）
     ee_goal_pose_set_tilted_b = torch.tensor(
         [
-            [target_pos[0], target_pos[1], 0.2,  rotated_quat[0], rotated_quat[1], rotated_quat[2], rotated_quat[3]],
+            [target_pos[0], target_pos[1], 0.2,  0, 0, 1, 0],
             [target_pos[0], target_pos[1], 0.25,  rotated_quat[0], rotated_quat[1], rotated_quat[2], rotated_quat[3]],
             [target_pos[0], target_pos[1], 0.35,  rotated_quat[0], rotated_quat[1], rotated_quat[2], rotated_quat[3]],
         ],
         device=sim.device,
     )
-    
+
     # Expand for multiple environments
     ee_target_set = [
-        pose.unsqueeze(0).repeat(args_cli.num_envs, 1) 
+        pose.unsqueeze(0).repeat(args_cli.num_envs, 1)
         for pose in ee_goal_pose_set_tilted_b
     ]
-    
-    # Get simulation dt
+
     sim_dt = sim.get_physics_dt()
-    
+
     # Run the simulator
     run_simulator(sim, scene, ur5_ctrl, ee_target_set, sim_dt)
 
