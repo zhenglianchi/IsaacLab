@@ -35,8 +35,14 @@ class OruTaskCfg:
     #   4. Write those joints as the initial state
     # The target pose NEVER changes — policy learns to reach the same goal
     # from different starting configurations.
-    ik_rand_pos_noise: tuple = (0.03, 0.03, 0.03)   # ±3cm EE position noise
-    ik_rand_rot_noise: tuple = (0.1, 0.1, 0.2)      # ±0.1rad XY, ±0.2rad yaw
+    ik_rand_pos_noise: tuple = (0.12, 0.12, 0.12)          # ±12cm EE position noise
+    ik_rand_rot_noise: tuple = (0.052, 0.052, 0.052)       # ±3° (0.052rad)
+
+    # ── Fixed IK offset for single-case evaluation ──────────────────
+    # When set (not None), overrides random noise. Used by play_force.py.
+    # Format: (dx, dy, dz) meters, (drx, dry, drz) radians
+    fixed_ik_offset_pos: tuple | None = None
+    fixed_ik_offset_rot: tuple | None = None
 
     # ── Success thresholds ─────────────────────────────────────────
     # XY centering on docking surface
@@ -47,7 +53,7 @@ class OruTaskCfg:
 
     # ── Reward: keypoint-based (same structure as Factory) ─────────
     num_keypoints: int = 4
-    keypoint_scale: float = 0.2       # m — scale of keypoint spread
+    keypoint_scale: float = 0.08      # m — ±3cm keypoint spread
 
     # Three-stage squashing-function parameters  r(x)=1/(e^{ax}+b+e^{-ax})
     keypoint_coef_baseline: list = (5, 4)     # far → coarse approach
@@ -62,16 +68,14 @@ class OruTaskCfg:
     ee_pos_action_bounds: tuple = (0.05, 0.05, 0.05)    # ± m
     ee_rot_action_bounds: tuple = (0.3, 0.3, 0.3)       # ± rad
 
-    # ── Default impedance gains (matching main_force1.py) ────────────
-    # Kp: [X, Y, Z, Rx, Ry, Rz] — low XY for compliance, Z slightly higher
-    # Kd auto-computed via get_deriv_gains: 2*sqrt(Kp), rot / rot_deriv_scale
-    default_task_prop_gains: tuple = (2.0, 2.0, 2.0, 2.0, 2.0, 2.0)
-    rot_deriv_scale: float = 3.0
+    # ── Default impedance gains ────────────────────────────────────
+    # Kp: [X, Y, Z, Rx, Ry, Rz] — baseline proportional stiffness
+    # Kd: 2*sqrt(Kp) for lin, 2*sqrt(Kp)/3 for rot (critical damping)
+    default_task_prop_gains: tuple = (30.0, 30.0, 30.0, 15.0, 15.0, 15.0)
+    default_task_deriv_gains: tuple = (10.95, 10.95, 10.95, 2.58, 2.58, 2.58)
 
-    # ── Variable impedance: policy controls gains ────────────────────
-    # Action in [-1,1] → Kp = base_Kp * (1 + action * gain_range)
-    #   action =  0 → Kp = base_Kp (default)
-    #   action = +1 → Kp = base_Kp * (1 + gain_range)  (stiffer)
-    #   action = -1 → Kp = base_Kp * (1 - gain_range)  (softer)
+    # ── Variable impedance: policy controls Kp + Kd (12D action) ───
+    # Action[:6]  → Kp = base_Kp * (1 + a * gain_range)
+    # Action[6:]  → Kd = base_Kd * (1 + a * gain_range)
     # Clamped to [5%, 500%] of base.
     gain_range: float = 2.0

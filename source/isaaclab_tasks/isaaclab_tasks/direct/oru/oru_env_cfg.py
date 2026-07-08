@@ -33,7 +33,8 @@ OBS_DIM_CFG = {
     "ee_linvel": 3,
     "ee_angvel": 3,
     "joint_pos": 6,
-    "task_prop_gains": 6,    # policy sees its own variable stiffness
+    "task_prop_gains": 6,     # policy sees its variable Kp
+    "task_deriv_gains": 6,    # policy sees its variable Kd
 }
 
 STATE_DIM_CFG = {
@@ -45,6 +46,7 @@ STATE_DIM_CFG = {
     "ground_pos": 3,
     "ground_quat": 4,
     "task_prop_gains": 6,
+    "task_deriv_gains": 6,
     "pos_threshold": 3,
     "rot_threshold": 3,
 }
@@ -204,26 +206,27 @@ class OruSceneCfg(InteractiveSceneCfg):
 class OruEnvCfg(DirectRLEnvCfg):
     """ORU Assembly env config — variable impedance control.
 
-    Policy outputs 6D gain scaling factors in [-1,1] that modulate the
-    impedance controller's Kp gains. Target pose is FIXED.
+    Policy outputs 12D: [Kp_scale(6), Kd_scale(6)] in [-1,1].
+    Target pose is FIXED per env (XY from ground, Z=0.4, quat=[0,0,1,0]).
     """
 
     decimation: int = 8
-    action_space: int = 6   # [Kp_scale_x..Kp_scale_rz] gain multipliers
+    action_space: int = 12  # 6 Kp + 6 Kd gain multipliers
     observation_space: int = 0   # computed at init
     state_space: int = 0
 
     obs_order: list = [
         "ee_pos_rel_ground", "ee_quat", "ee_linvel", "ee_angvel", "joint_pos",
-        "task_prop_gains",
+        "task_prop_gains", "task_deriv_gains",
     ]
     state_order: list = [
         "ee_pos_rel_ground", "ee_quat", "ee_linvel", "ee_angvel", "joint_pos",
-        "ground_pos", "ground_quat", "task_prop_gains", "pos_threshold", "rot_threshold",
+        "ground_pos", "ground_quat",
+        "task_prop_gains", "task_deriv_gains", "pos_threshold", "rot_threshold",
     ]
 
     task: OruTaskCfg = OruTaskCfg()
-    episode_length_s: float = 40.0
+    episode_length_s: float = 15.0
 
     ema_factor: float = 0.2
 

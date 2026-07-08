@@ -101,11 +101,11 @@ class OruEnv(DirectRLEnv):
         self.prev_actions = torch.zeros_like(self.actions)
 
         prop = self.cfg.task.default_task_prop_gains
+        deriv = self.cfg.task.default_task_deriv_gains
         self.base_gains = torch.tensor(prop, device=self.device).repeat(N, 1)
+        self.base_deriv = torch.tensor(deriv, device=self.device).repeat(N, 1)
         self.task_prop_gains = self.base_gains.clone()
-        self.task_deriv_gains = oru_utils.get_deriv_gains(
-            self.task_prop_gains, self.cfg.task.rot_deriv_scale
-        )
+        self.task_deriv_gains = self.base_deriv.clone()
         self.gain_range = self.cfg.task.gain_range
 
         # Kept for state dict compatibility (not used in _apply_action)
@@ -200,13 +200,14 @@ class OruEnv(DirectRLEnv):
         if self.last_update_timestamp < self.robot._data._sim_timestamp:
             self._compute_intermediate_values(dt)
 
-        # ── Actions are gain scaling factors: [-1,1] → Kp = base * (1 + a * range) ──
-        scale = 1.0 + self.actions[:, 0:6] * self.gain_range
-        scale = torch.clamp(scale, min=0.05, max=5.0)
-        self.task_prop_gains = self.base_gains * scale
-        self.task_deriv_gains = oru_utils.get_deriv_gains(
-            self.task_prop_gains, self.cfg.task.rot_deriv_scale,
-        )
+        # ── Actions: [:6]=Kp scale, [6:]=Kd scale ──
+        scale_kp = 1.0 + self.actions[:, 0:6] * self.gain_range
+        scale_kp = torch.clamp(scale_kp, min=0.05, max=5.0)
+        scale_kd = 1.0 + self.actions[:, 6:12] * self.gain_range
+        scale_kd = torch.clamp(scale_kd, min=0.05, max=5.0)
+
+        self.task_prop_gains = self.base_gains * scale_kp
+        self.task_deriv_gains = self.base_deriv * scale_kd
 
         # ── Target: XY = ground XY, Z = 0.4, quat = [0,0,1,0] ──
         ground_pos = self.ground.data.root_pos_w
@@ -249,13 +250,15 @@ class OruEnv(DirectRLEnv):
             "ee_linvel": self.ee_linvel_fd,
             "ee_angvel": self.ee_angvel_fd,
             "joint_pos": self.joint_pos,
-            "task_prop_gains": self.task_prop_gains,   # policy sees its variable stiffness
+            "task_prop_gains": self.task_prop_gains,
+            "task_deriv_gains": self.task_deriv_gains,
         }
         state_dict = {
             **obs_dict,
             "ground_pos": ground_pos,
             "ground_quat": ground_quat,
             "task_prop_gains": self.task_prop_gains,
+            "task_deriv_gains": self.task_deriv_gains,
             "pos_threshold": self.pos_threshold,
             "rot_threshold": self.rot_threshold,
         }
@@ -269,47 +272,35 @@ class OruEnv(DirectRLEnv):
         return {"policy": policy_obs, "critic": critic_obs}
 
     # ==================================================================
-    # Rewards — virtual ORU pose from UR5 FK + chain offset
+    # Rewards — keypoints from EE to fixed target
     # ==================================================================
 
-    # offset from UR5 wrist_3_link to ORU bottom (sum of force1 joints − half height)
-    ORU_BOTTOM_Z = 0.062 - 0.0253 - 0.257 - 0.075  # ≈ −0.2953
-    GROUND_H = 0.05
-    ORU_HALF_H = 0.075
-
-    def _virtual_oru_bottom(self) -> torch.Tensor:
-        local = torch.zeros((self.num_envs, 3), device=self.device)
-        local[:, 2] = self.ORU_BOTTOM_Z
-        id_q = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
-        _, w = torch_utils.tf_combine(self.ee_quat, self.ee_pos, id_q, local)
-        return w
-
-    def _ground_top(self) -> torch.Tensor:
-        ground_pos = self.ground.data.root_pos_w
-        local = torch.zeros((self.num_envs, 3), device=self.device)
-        local[:, 2] = self.GROUND_H
-        id_q = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
-        _, w = torch_utils.tf_combine(self.ground.data.root_quat_w, ground_pos, id_q, local)
-        return w
+    def _get_target_ref(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Fixed target: XY=ground XY, Z=0.4, quat=[0,0,1,0]."""
+        pos = self.ground.data.root_pos_w.clone()
+        pos[:, 2] = self.fixed_target_z
+        return pos, self.fixed_target_quat
 
     def _get_rewards(self) -> torch.Tensor:
         self._compute_intermediate_values(self.physics_dt)
 
-        oru_bottom = self._virtual_oru_bottom()
-        ground_top = self._ground_top()
+        # ORU side: ee_pos as reference
+        oru_ref_pos = self.ee_pos
+        oru_ref_quat = self.ee_quat
+
+        # Target side: ground XY + Z=0.4, quat=[0,0,1,0]
+        target_ref_pos, target_ref_quat = self._get_target_ref()
 
         num_kp = self.cfg.task.num_keypoints
         scale = self.cfg.task.keypoint_scale
         offsets = oru_utils.get_keypoint_offsets(num_kp, self.device) * scale
         id_q = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
-        oru_q = self.ee_quat
-        ground_q = self.ground.data.root_quat_w
 
         kp_oru = torch.zeros((self.num_envs, num_kp, 3), device=self.device)
         kp_target = torch.zeros((self.num_envs, num_kp, 3), device=self.device)
         for i, off in enumerate(offsets):
-            kp_oru[:, i] = torch_utils.tf_combine(oru_q, oru_bottom, id_q, off.repeat(self.num_envs, 1))[1]
-            kp_target[:, i] = torch_utils.tf_combine(ground_q, ground_top, id_q, off.repeat(self.num_envs, 1))[1]
+            kp_oru[:, i] = torch_utils.tf_combine(oru_ref_quat, oru_ref_pos, id_q, off.repeat(self.num_envs, 1))[1]
+            kp_target[:, i] = torch_utils.tf_combine(target_ref_quat, target_ref_pos, id_q, off.repeat(self.num_envs, 1))[1]
 
         kp_dist = torch.norm(kp_oru - kp_target, p=2, dim=-1).mean(-1)
 
@@ -337,11 +328,11 @@ class OruEnv(DirectRLEnv):
         return rew
 
     def _get_curr_successes(self, threshold: float) -> torch.Tensor:
-        ob = self._virtual_oru_bottom()
-        gt = self._ground_top()
-        xy = torch.norm(gt[:, :2] - ob[:, :2], dim=-1)
-        z = ob[:, 2] - gt[:, 2]
-        return (xy < self.cfg.task.xy_tolerance) & (z < self.GROUND_H * threshold)
+        oru_pos = self.ee_pos
+        target_pos, _ = self._get_target_ref()
+        xy = torch.norm(target_pos[:, :2] - oru_pos[:, :2], dim=-1)
+        z = oru_pos[:, 2] - target_pos[:, 2]
+        return (xy < self.cfg.task.xy_tolerance) & (z < -0.05 * threshold)
 
     # ==================================================================
     # Done
@@ -393,12 +384,16 @@ class OruEnv(DirectRLEnv):
         home_ee_pos_w = ee_pose_w[env_ids, 0:3].clone()
         home_ee_quat_w = ee_pose_w[env_ids, 3:7].clone()
 
-        # ── Step 3: add random offset to EE pose ────────────────────
-        pos_std = torch.tensor(self.cfg.task.ik_rand_pos_noise, device=self.device)
-        rot_std = torch.tensor(self.cfg.task.ik_rand_rot_noise, device=self.device)
-
-        rand_pos = (torch.rand((n, 3), device=self.device) - 0.5) * 2 * pos_std
-        rand_rot = (torch.rand((n, 3), device=self.device) - 0.5) * 2 * rot_std
+        # ── Step 3: offset EE pose (fixed case or randomized) ────────
+        if self.cfg.task.fixed_ik_offset_pos is not None:
+            # Fixed offset for single-case evaluation (play_force.py)
+            rand_pos = torch.tensor(self.cfg.task.fixed_ik_offset_pos, device=self.device).unsqueeze(0).repeat(n, 1)
+            rand_rot = torch.tensor(self.cfg.task.fixed_ik_offset_rot, device=self.device).unsqueeze(0).repeat(n, 1)
+        else:
+            pos_std = torch.tensor(self.cfg.task.ik_rand_pos_noise, device=self.device)
+            rot_std = torch.tensor(self.cfg.task.ik_rand_rot_noise, device=self.device)
+            rand_pos = (torch.rand((n, 3), device=self.device) - 0.5) * 2 * pos_std
+            rand_rot = (torch.rand((n, 3), device=self.device) - 0.5) * 2 * rot_std
 
         target_ee_pos_w = home_ee_pos_w + rand_pos
 

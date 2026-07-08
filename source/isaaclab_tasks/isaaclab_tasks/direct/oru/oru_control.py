@@ -69,13 +69,15 @@ def compute_dof_torque(
         delta_ee_pose, ee_linvel, ee_angvel, task_prop_gains, task_deriv_gains
     )
 
-    # Dead zone
-    if dead_zone_thresholds is not None:
-        task_wrench = torch.where(
-            task_wrench.abs() < dead_zone_thresholds,
-            torch.zeros_like(task_wrench),
-            task_wrench.sign() * (task_wrench.abs() - dead_zone_thresholds),
-        )
+    # Dead zone — suppress tiny wrenches to prevent limit-cycle oscillation
+    dead_zone = dead_zone_thresholds
+    if dead_zone is None:
+        dead_zone = torch.tensor([0.5, 0.5, 0.5, 0.2, 0.2, 0.2], device=device)
+    task_wrench = torch.where(
+        task_wrench.abs() < dead_zone,
+        torch.zeros_like(task_wrench),
+        task_wrench.sign() * (task_wrench.abs() - dead_zone),
+    )
 
     # Map to joint space
     jacobian_T = torch.transpose(jacobian, dim0=1, dim1=2)
@@ -91,7 +93,7 @@ def compute_dof_torque(
     distance_to_default = (distance_to_default + torch.pi) % (2 * torch.pi) - torch.pi
 
     kp_null = 1.0
-    kd_null = 0.1
+    kd_null = 2.0   # critical damping 2*sqrt(1.0)
     u_null = kd_null * (-dof_vel[:, :6]) + kp_null * distance_to_default
 
     arm_mass_matrix_inv = torch.inverse(mass_matrix)
@@ -159,15 +161,9 @@ def task_space_pd(
     task_wrench = torch.zeros_like(delta_ee_pose)
 
     lin_error = delta_ee_pose[:, 0:3]
-    # XY direction gets 2x priority for horizontal alignment
-    xy_weight = 2.0
-    task_wrench[:, 0:2] = (
-        xy_weight * task_prop_gains[:, 0:2] * lin_error[:, 0:2]
-        + xy_weight * task_deriv_gains[:, 0:2] * (0.0 - ee_linvel[:, 0:2])
-    )
-    task_wrench[:, 2:3] = (
-        task_prop_gains[:, 2:3] * lin_error[:, 2:3]
-        + task_deriv_gains[:, 2:3] * (0.0 - ee_linvel[:, 2:3])
+    task_wrench[:, 0:3] = (
+        task_prop_gains[:, 0:3] * lin_error
+        + task_deriv_gains[:, 0:3] * (0.0 - ee_linvel)
     )
 
     rot_error = delta_ee_pose[:, 3:6]

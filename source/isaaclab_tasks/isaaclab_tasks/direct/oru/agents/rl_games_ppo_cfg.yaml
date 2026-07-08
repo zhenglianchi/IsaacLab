@@ -46,8 +46,8 @@ params:
       concat_input: True
       layer_norm: True
 
-  load_checkpoint: False
-  load_path: ""
+  load_checkpoint: True
+  load_path: "logs/rl_games/OruAssembly/test/nn/last_OruAssembly_ep_100_rew_51.43623.pth"
 
   config:
     name: OruAssembly
@@ -71,7 +71,7 @@ params:
     schedule_type: standard
     kl_threshold: 0.008
     score_to_win: 20000
-    max_epochs: 200
+    max_epochs: 500
     save_best_after: 10
     save_frequency: 100
     print_stats: True
