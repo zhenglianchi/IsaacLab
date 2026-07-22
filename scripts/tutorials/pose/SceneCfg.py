@@ -97,7 +97,7 @@ ORU_CFG = RigidObjectCfg(
         usd_path="assets/USD/o7/ORU.usd", 
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=True,
-            kinematic_enabled=True,
+            kinematic_enabled=False,
         ),
         collision_props=sim_utils.CollisionPropertiesCfg(
             contact_offset=0.0,
@@ -170,49 +170,49 @@ DOFBOT_CONFIG = ArticulationCfg(
         "shoulder_pan_joint": ImplicitActuatorCfg(
             joint_names_expr=["shoulder_pan_joint"],
             effort_limit_sim=87,
-            velocity_limit_sim=10,
-            stiffness=8000,
-            damping=200,
+            velocity_limit_sim=2,
+            stiffness=500,
+            damping=45,
         ),
 
         "shoulder_lift_joint": ImplicitActuatorCfg(
             joint_names_expr=["shoulder_lift_joint"],
             effort_limit_sim=87,
-            velocity_limit_sim=10,
-            stiffness=8000,
-            damping=200,
+            velocity_limit_sim=2,
+            stiffness=500,
+            damping=45,
         ),
 
         "elbow_joint": ImplicitActuatorCfg(
             joint_names_expr=["elbow_joint"],
             effort_limit_sim=87,
-            velocity_limit_sim=10,
-            stiffness=8000,
-            damping=200,
+            velocity_limit_sim=2,
+            stiffness=500,
+            damping=45,
         ),
 
         "wrist_1_joint": ImplicitActuatorCfg(
             joint_names_expr=["wrist_1_joint"],
             effort_limit_sim=87,
-            velocity_limit_sim=10,
-            stiffness=8000,
-            damping=200,
+            velocity_limit_sim=2,
+            stiffness=500,
+            damping=45,
         ),
 
         "wrist_2_joint": ImplicitActuatorCfg(
             joint_names_expr=["wrist_2_joint"],
             effort_limit_sim=87,
-            velocity_limit_sim=10,
-            stiffness=8000,
-            damping=200,
+            velocity_limit_sim=2,
+            stiffness=500,
+            damping=45,
         ),
 
         "wrist_3_joint": ImplicitActuatorCfg(
             joint_names_expr=["wrist_3_joint"],
             effort_limit_sim=87,
-            velocity_limit_sim=10,
-            stiffness=8000,
-            damping=200,
+            velocity_limit_sim=2,
+            stiffness=500,
+            damping=45,
         ),
     },
 )

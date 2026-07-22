@@ -80,10 +80,12 @@ class UR5Controller:
         """
         ee_pose_w = self.robot.data.body_pose_w[:, self.robot_entity_cfg.body_ids[0]]
 
-        # prepare IK command
+        # IK command: use target position but KEEP current orientation
+        # (prevents twisting when target quat is far from current quat)
         if target_pos.dim() == 1:
             target_pos = target_pos.unsqueeze(0).repeat(self.args_cli.num_envs, 1)
-        ik_command = torch.cat([target_pos, target_quat], dim=1)
+        current_quat = ee_pose_w[:, 3:7]
+        ik_command = torch.cat([target_pos, current_quat], dim=1)
         self.diff_ik.set_command(ik_command)
 
         # Compute Jacobian
@@ -107,6 +109,12 @@ class UR5Controller:
         self.scene.write_data_to_sim()
         self.sim.step(render=True)
         self.scene.update(self.sim_dt)
+
+        # Print EE pose
+        ee_pose_w = self.robot.data.body_pose_w[:, self.robot_entity_cfg.body_ids[0]]
+        print(f"EE Pos: {ee_pose_w[0, :3].cpu().numpy()}  "
+              f"Target: {target_pos[0].cpu().numpy()}  "
+              f"dPos: {(target_pos[0] - ee_pose_w[0, :3]).cpu().numpy()}")
 
         # # visualize EE (disabled — too slow)
         # ee_pose_w = self.robot.data.body_pose_w[:, self.robot_entity_cfg.body_ids[0]]

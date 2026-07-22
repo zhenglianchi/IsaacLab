@@ -85,44 +85,11 @@ def main():
     ur5_ctrl = UR5Controller(scene, sim, args_cli)
 
     # ==========================================================
-    # 目标位置设置为Ground中心坐标（与main_force.py一致）
+    # 目标位姿与 force1 一致
     # ==========================================================
-    # 获取Ground的世界坐标位置和姿态
-    ground_pos = scene["Ground"].data.root_pos_w[0].cpu().numpy()
-    ground_quat = scene["Ground"].data.root_quat_w[0].cpu().numpy()
-    print(f"Ground position: {ground_pos}")
-    print(f"Ground quaternion: {ground_quat}")
-
-    # 目标位置：Ground中心上方不同高度
-    target_pos = ground_pos.copy()
-    target_quat = ground_quat.copy()
-
-    # 定义绕 Z 轴 180° 的旋转四元数 (wxyz 格式)
-    # 180° = π rad，cos(π/2)=0, sin(π/2)=1，绕 Z 轴为 [w, x, y, z] = [0, 0, 0, 1]
-    quat_z_180 = np.array([0.0, 0.0, 0.0, 1.0])
-
-    # 四元数乘法函数 (Hamilton product)
-    def quat_multiply(q1, q2):
-        """四元数乘法 (wxyz 格式)"""
-        w1, x1, y1, z1 = q1
-        w2, x2, y2, z2 = q2
-        return np.array([
-            w1*w2 - x1*x2 - y1*y2 - z1*z2,  # w
-            w1*x2 + x1*w2 + y1*z2 - z1*y2,  # x
-            w1*y2 - x1*z2 + y1*w2 + z1*x2,  # y
-            w1*z2 + x1*y2 - y1*x2 + z1*w2   # z
-        ])
-
-    # 计算旋转后的四元数（全局 Z 轴旋转 180°）
-    rotated_quat = quat_multiply(quat_z_180, target_quat)
-    rotated_quat = rotated_quat / np.linalg.norm(rotated_quat)  # 归一化
-
-    # 定义目标位姿序列（与main_force.py相同）
-    ee_goal_pose_set_tilted_b = torch.tensor(
+    ee_goal_pose_set = torch.tensor(
         [
-            [target_pos[0], target_pos[1], 0.2,  0, 0, 1, 0],
-            [target_pos[0], target_pos[1], 0.25,  rotated_quat[0], rotated_quat[1], rotated_quat[2], rotated_quat[3]],
-            [target_pos[0], target_pos[1], 0.35,  rotated_quat[0], rotated_quat[1], rotated_quat[2], rotated_quat[3]],
+            [0.4, 0, 0.4,  0, 0, 1, 0],
         ],
         device=sim.device,
     )
@@ -130,7 +97,7 @@ def main():
     # Expand for multiple environments
     ee_target_set = [
         pose.unsqueeze(0).repeat(args_cli.num_envs, 1)
-        for pose in ee_goal_pose_set_tilted_b
+        for pose in ee_goal_pose_set
     ]
 
     sim_dt = sim.get_physics_dt()

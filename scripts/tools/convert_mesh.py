@@ -69,7 +69,7 @@ parser.add_argument(
 parser.add_argument(
     "--collision-approximation",
     type=str,
-    default="convexDecomposition",
+    default="sdf",
     choices=_valid_collision_approx,
     help="The method used for approximating the collision mesh. Set to 'none' to disable collision mesh generation.",
 )

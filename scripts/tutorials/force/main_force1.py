@@ -34,6 +34,7 @@ from isaaclab.sim.schemas.schemas_cfg import (
     CollisionPropertiesCfg,
     TriangleMeshPropertiesCfg,
 )
+from isaaclab.sim.spawners.materials.physics_materials_cfg import RigidBodyMaterialCfg
 
 # Update the target commands
 def update_target(sim,scene,root_pose_w,ee_target_set,current_goal_idx):
@@ -86,7 +87,10 @@ def main():
             enable_external_forces_every_iteration=True,
             min_velocity_iteration_count=2,
             max_velocity_iteration_count=2,
-        )
+        ),
+        physics_material=RigidBodyMaterialCfg(
+            static_friction=0.3, dynamic_friction=0.2,
+        ),
     )
     sim = sim_utils.SimulationContext(sim_cfg)
     sim.set_camera_view((3.5, 0.0, 3.2), (0.0, 0.0, 0.5))
@@ -159,19 +163,14 @@ def main():
         device=sim.device,
     )
 
+    # High XY + Z for pushing, low rot for compliance
     kp_set_task = torch.tensor(
-        [
-            [0.5, 0.5, 1.0, 2.0, 2.0, 2.0],
-            #[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-        ],
+        [[400.0, 400.0, 300.0, 400.0, 400.0, 400.0]],
         device=sim.device,
     )
 
     kd_set_task = torch.tensor(
-        [
-            [1.0, 1.0, 0.5, 1.0, 1.0, 1.0],
-            #[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-        ],
+        [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]],
         device=sim.device,
     )
 

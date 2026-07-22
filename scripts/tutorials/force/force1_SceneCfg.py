@@ -94,10 +94,9 @@ GRIPPER_CFG = RigidObjectCfg(
 
 ORU_CFG = RigidObjectCfg(
     spawn=sim_utils.UsdFileCfg(
-        usd_path="assets/USD/o7/ORU.usd", 
+        usd_path="assets/USD/oru/ORU.usd",
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=True,
-            kinematic_enabled=True,
         ),
         collision_props=sim_utils.CollisionPropertiesCfg(
             contact_offset=0.0,
@@ -168,49 +167,49 @@ DOFBOT_CONFIG = ArticulationCfg(
         "shoulder_pan_joint": ImplicitActuatorCfg(
             joint_names_expr=["shoulder_pan_joint"],
             effort_limit_sim=87,
-            velocity_limit_sim=1,
+            velocity_limit_sim=10,
             stiffness=0,
-            damping=0,
+            damping=15.0,
         ),
 
         "shoulder_lift_joint": ImplicitActuatorCfg(
             joint_names_expr=["shoulder_lift_joint"],
             effort_limit_sim=87,
-            velocity_limit_sim=1,
+            velocity_limit_sim=10,
             stiffness=0,
-            damping=0,
+            damping=15.0,
         ),
 
         "elbow_joint": ImplicitActuatorCfg(
             joint_names_expr=["elbow_joint"],
             effort_limit_sim=87,
-            velocity_limit_sim=1,
+            velocity_limit_sim=10,
             stiffness=0,
-            damping=0,
+            damping=15.0,
         ),
 
         "wrist_1_joint": ImplicitActuatorCfg(
             joint_names_expr=["wrist_1_joint"],
             effort_limit_sim=87,
-            velocity_limit_sim=1,
+            velocity_limit_sim=10,
             stiffness=0,
-            damping=0,
+            damping=15.0,
         ),
 
         "wrist_2_joint": ImplicitActuatorCfg(
             joint_names_expr=["wrist_2_joint"],
             effort_limit_sim=87,
-            velocity_limit_sim=1,
+            velocity_limit_sim=10,
             stiffness=0,
-            damping=0,
+            damping=15.0,
         ),
 
         "wrist_3_joint": ImplicitActuatorCfg(
             joint_names_expr=["wrist_3_joint"],
             effort_limit_sim=87,
-            velocity_limit_sim=1,
+            velocity_limit_sim=10,
             stiffness=0,
-            damping=0,
+            damping=15.0,
         ),
     },
 )
@@ -381,7 +380,7 @@ def add_fixed_joint(stage, args_cli):
             f"{env_ns}/Gripper/base_link/oru_joint",
             f"{env_ns}/Gripper/base_link",
             f"{env_ns}/ORU/base_link",
-            child_offset_pos=(0, 0, -0.257),
+            child_offset_pos=(0, 0, -0.305),
             child_offset_axis=(0, 0, 1),
             child_offset_angle=math.pi,
         )
