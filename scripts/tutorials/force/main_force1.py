@@ -158,19 +158,19 @@ def main():
     
     ee_goal_pose_set_tilted_b = torch.tensor(
         [
-            [0.4, 0, 0.4,  0, 0, 1, 0]
+            [0.4, 0, 0.536,  0, 0, 1, 0]
         ],
         device=sim.device,
     )
 
     # High XY + Z for pushing, low rot for compliance
     kp_set_task = torch.tensor(
-        [[400.0, 400.0, 300.0, 400.0, 400.0, 400.0]],
+        [[30.0, 30.0, 20.0, 10.0, 10.0, 10.0]],
         device=sim.device,
     )
 
     kd_set_task = torch.tensor(
-        [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]],
+        [[5.0, 5.0, 5.0, 2.0, 2.0, 2.0]],
         device=sim.device,
     )
 
@@ -290,6 +290,8 @@ def main():
             
 
             print(f"Step: {count}")
+            joint_deg = dof_pos[0].cpu().numpy() * 180.0 / 3.14159
+            print(f"Joints(deg): {joint_deg}")
             print(f"EE Position: {ee_pos[0].cpu().numpy()}")
             print(f"EE Quaternion (wxyz): {ee_quat[0].cpu().numpy()}")
             print(f"EE Target Position: {ctrl_target_ee_pos[0].cpu().numpy()}")

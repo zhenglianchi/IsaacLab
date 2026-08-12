@@ -152,12 +152,12 @@ DOFBOT_CONFIG = ArticulationCfg(
 
     init_state=ArticulationCfg.InitialStateCfg(
         joint_pos={
-            "shoulder_pan_joint": 0.0,
-            "shoulder_lift_joint": -math.pi / 2,
-            "elbow_joint": math.pi / 6,
-            "wrist_1_joint": -math.pi / 6,
-            "wrist_2_joint": -math.pi / 2,
-            "wrist_3_joint": math.pi / 2,
+            "shoulder_pan_joint": -15.60 * math.pi / 180,
+            "shoulder_lift_joint": -82.61 * math.pi / 180,
+            "elbow_joint": 29.85 * math.pi / 180,
+            "wrist_1_joint": -37.15 * math.pi / 180,
+            "wrist_2_joint": -89.96 * math.pi / 180,
+            "wrist_3_joint": 74.46 * math.pi / 180,
         },
         pos=(0, 0, 0),
     ),
@@ -169,7 +169,7 @@ DOFBOT_CONFIG = ArticulationCfg(
             effort_limit_sim=87,
             velocity_limit_sim=10,
             stiffness=0,
-            damping=15.0,
+            damping=0.0,
         ),
 
         "shoulder_lift_joint": ImplicitActuatorCfg(
@@ -177,7 +177,7 @@ DOFBOT_CONFIG = ArticulationCfg(
             effort_limit_sim=87,
             velocity_limit_sim=10,
             stiffness=0,
-            damping=15.0,
+            damping=0.0,
         ),
 
         "elbow_joint": ImplicitActuatorCfg(
@@ -185,7 +185,7 @@ DOFBOT_CONFIG = ArticulationCfg(
             effort_limit_sim=87,
             velocity_limit_sim=10,
             stiffness=0,
-            damping=15.0,
+            damping=0.0,
         ),
 
         "wrist_1_joint": ImplicitActuatorCfg(
@@ -193,7 +193,7 @@ DOFBOT_CONFIG = ArticulationCfg(
             effort_limit_sim=87,
             velocity_limit_sim=10,
             stiffness=0,
-            damping=15.0,
+            damping=0.0,
         ),
 
         "wrist_2_joint": ImplicitActuatorCfg(
@@ -201,7 +201,7 @@ DOFBOT_CONFIG = ArticulationCfg(
             effort_limit_sim=87,
             velocity_limit_sim=10,
             stiffness=0,
-            damping=15.0,
+            damping=0.0,
         ),
 
         "wrist_3_joint": ImplicitActuatorCfg(
@@ -209,7 +209,7 @@ DOFBOT_CONFIG = ArticulationCfg(
             effort_limit_sim=87,
             velocity_limit_sim=10,
             stiffness=0,
-            damping=15.0,
+            damping=0.0,
         ),
     },
 )

@@ -70,39 +70,39 @@ UR5_CFG = ArticulationCfg(
     ),
     init_state=ArticulationCfg.InitialStateCfg(
         joint_pos={
-            "shoulder_pan_joint": 0.0,
-            "shoulder_lift_joint": -math.pi / 2,
-            "elbow_joint": math.pi / 6,
-            "wrist_1_joint": -math.pi / 6,
-            "wrist_2_joint": -math.pi / 2,
-            "wrist_3_joint": math.pi / 2,
+            "shoulder_pan_joint": -15.60 * math.pi / 180,
+            "shoulder_lift_joint": -82.61 * math.pi / 180,
+            "elbow_joint": 29.85 * math.pi / 180,
+            "wrist_1_joint": -37.15 * math.pi / 180,
+            "wrist_2_joint": -89.96 * math.pi / 180,
+            "wrist_3_joint": 74.46 * math.pi / 180,
         },
         pos=(0.0, 0.0, 0.0),
     ),
     actuators={
         "shoulder_pan_joint": ImplicitActuatorCfg(
             joint_names_expr=["shoulder_pan_joint"],
-            effort_limit_sim=87, velocity_limit_sim=1, stiffness=0, damping=0,
+            effort_limit_sim=87, velocity_limit_sim=10, stiffness=0, damping=15.0,
         ),
         "shoulder_lift_joint": ImplicitActuatorCfg(
             joint_names_expr=["shoulder_lift_joint"],
-            effort_limit_sim=87, velocity_limit_sim=1, stiffness=0, damping=0,
+            effort_limit_sim=87, velocity_limit_sim=10, stiffness=0, damping=15.0,
         ),
         "elbow_joint": ImplicitActuatorCfg(
             joint_names_expr=["elbow_joint"],
-            effort_limit_sim=87, velocity_limit_sim=1, stiffness=0, damping=0,
+            effort_limit_sim=87, velocity_limit_sim=10, stiffness=0, damping=15.0,
         ),
         "wrist_1_joint": ImplicitActuatorCfg(
             joint_names_expr=["wrist_1_joint"],
-            effort_limit_sim=87, velocity_limit_sim=1, stiffness=0, damping=0,
+            effort_limit_sim=87, velocity_limit_sim=10, stiffness=0, damping=15.0,
         ),
         "wrist_2_joint": ImplicitActuatorCfg(
             joint_names_expr=["wrist_2_joint"],
-            effort_limit_sim=87, velocity_limit_sim=1, stiffness=0, damping=0,
+            effort_limit_sim=87, velocity_limit_sim=10, stiffness=0, damping=15.0,
         ),
         "wrist_3_joint": ImplicitActuatorCfg(
             joint_names_expr=["wrist_3_joint"],
-            effort_limit_sim=87, velocity_limit_sim=1, stiffness=0, damping=0,
+            effort_limit_sim=87, velocity_limit_sim=10, stiffness=0, damping=15.0,
         ),
     },
 )
@@ -142,7 +142,7 @@ ORU_CFG = RigidObjectCfg(
     spawn=sim_utils.UsdFileCfg(
         usd_path="assets/USD/o7/ORU.usd",
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
-            disable_gravity=True, kinematic_enabled=True,
+            disable_gravity=True,
         ),
         collision_props=sim_utils.CollisionPropertiesCfg(
             contact_offset=0.0, rest_offset=0.0,

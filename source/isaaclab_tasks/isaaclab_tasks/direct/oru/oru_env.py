@@ -244,9 +244,13 @@ class OruEnv(DirectRLEnv):
         ground_pos = self.ground.data.root_pos_w
         ground_quat = self.ground.data.root_quat_w
 
+        # EE quaternion relative to ground: ground_q⁻¹ * ee_q
+        ground_quat_inv = torch_utils.quat_conjugate(ground_quat)
+        ee_quat_rel_ground = torch_utils.quat_mul(ground_quat_inv, self.ee_quat)
+
         obs_dict = {
             "ee_pos_rel_ground": self.ee_pos - ground_pos,
-            "ee_quat": self.ee_quat,
+            "ee_quat": ee_quat_rel_ground,
             "ee_linvel": self.ee_linvel_fd,
             "ee_angvel": self.ee_angvel_fd,
             "joint_pos": self.joint_pos,
@@ -284,47 +288,40 @@ class OruEnv(DirectRLEnv):
     def _get_rewards(self) -> torch.Tensor:
         self._compute_intermediate_values(self.physics_dt)
 
-        # ORU side: ee_pos as reference
-        oru_ref_pos = self.ee_pos
-        oru_ref_quat = self.ee_quat
+        # Target side: ground XY + Z=0.436, quat=[0,0,1,0]
+        target_ref_pos, _ = self._get_target_ref()
 
-        # Target side: ground XY + Z=0.4, quat=[0,0,1,0]
-        target_ref_pos, target_ref_quat = self._get_target_ref()
+        # ── Single-point position reward ────────────────────────────────
+        pos_error = torch.norm(self.ee_pos - target_ref_pos, p=2, dim=-1)
+        rew = torch.exp(-20.0 * pos_error)  # steep: 5cm→0.37, 1cm→0.82, 1mm→0.98
 
-        num_kp = self.cfg.task.num_keypoints
-        scale = self.cfg.task.keypoint_scale
-        offsets = oru_utils.get_keypoint_offsets(num_kp, self.device) * scale
-        id_q = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
+        # # ── [reserved] Multi-keypoint + 3-stage squashing (innovation) ──
+        # num_kp = self.cfg.task.num_keypoints
+        # scale = self.cfg.task.keypoint_scale
+        # offsets = oru_utils.get_keypoint_offsets(num_kp, self.device) * scale
+        # kp_oru = self.ee_pos.unsqueeze(1) + offsets.unsqueeze(0)
+        # kp_target = target_ref_pos.unsqueeze(1) + offsets.unsqueeze(0)
+        # kp_dist = torch.norm(kp_oru - kp_target, p=2, dim=-1).mean(-1)
+        # a0, b0 = self.cfg.task.keypoint_coef_baseline
+        # a1, b1 = self.cfg.task.keypoint_coef_coarse
+        # a2, b2 = self.cfg.task.keypoint_coef_fine
+        # rew = (
+        #     oru_utils.squashing_fn(kp_dist, a0, b0)
+        #     + oru_utils.squashing_fn(kp_dist, a1, b1)
+        #     + oru_utils.squashing_fn(kp_dist, a2, b2)
+        # )
 
-        kp_oru = torch.zeros((self.num_envs, num_kp, 3), device=self.device)
-        kp_target = torch.zeros((self.num_envs, num_kp, 3), device=self.device)
-        for i, off in enumerate(offsets):
-            kp_oru[:, i] = torch_utils.tf_combine(oru_ref_quat, oru_ref_pos, id_q, off.repeat(self.num_envs, 1))[1]
-            kp_target[:, i] = torch_utils.tf_combine(target_ref_quat, target_ref_pos, id_q, off.repeat(self.num_envs, 1))[1]
-
-        kp_dist = torch.norm(kp_oru - kp_target, p=2, dim=-1).mean(-1)
-
-        a0, b0 = self.cfg.task.keypoint_coef_baseline
-        a1, b1 = self.cfg.task.keypoint_coef_coarse
-        a2, b2 = self.cfg.task.keypoint_coef_fine
-
-        rew = (
-            oru_utils.squashing_fn(kp_dist, a0, b0)
-            + oru_utils.squashing_fn(kp_dist, a1, b1)
-            + oru_utils.squashing_fn(kp_dist, a2, b2)
-        )
         rew -= self.cfg.task.action_penalty_scale * torch.norm(self.actions, p=2, dim=-1)
         rew -= self.cfg.task.action_grad_penalty_scale * torch.norm(
             self.actions - self.prev_actions, p=2, dim=-1
         )
         curr_s = self._get_curr_successes(self.cfg.task.success_threshold)
-        curr_e = self._get_curr_successes(self.cfg.task.engage_threshold)
-        rew += curr_s.float() + curr_e.float()
+        rew += curr_s.float()
 
         self.prev_actions = self.actions.clone()
         if torch.any(self.reset_buf):
             self.extras["success_rate"] = curr_s.float().mean()
-        self.extras["rew_kp_dist"] = kp_dist.mean()
+        self.extras["rew_pos_error"] = pos_error.mean()
         return rew
 
     def _get_curr_successes(self, threshold: float) -> torch.Tensor:

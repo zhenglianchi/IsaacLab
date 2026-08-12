@@ -24,7 +24,7 @@ class OruTaskCfg:
     # Position [0.4, 0, 0] + Quaternion [0, 0, 1, 0] (wxyz, 180° around Y)
     # This matches the Ground config pos + rot. The policy always targets
     # this same pose — domain randomization is on the START, not the GOAL.
-    target_pos: tuple = (0.4, 0.0, 0.4)
+    target_pos: tuple = (0.4, 0.0, 0.436)
     target_quat: tuple = (0.0, 0.0, 1.0, 0.0)
 
     # ── Domain randomization: IK noise (reset-time only) ───────────
@@ -70,9 +70,9 @@ class OruTaskCfg:
 
     # ── Default impedance gains ────────────────────────────────────
     # Kp: [X, Y, Z, Rx, Ry, Rz] — baseline proportional stiffness
-    # Kd: 2*sqrt(Kp) for lin, 2*sqrt(Kp)/3 for rot (critical damping)
-    default_task_prop_gains: tuple = (30.0, 30.0, 30.0, 15.0, 15.0, 15.0)
-    default_task_deriv_gains: tuple = (10.95, 10.95, 10.95, 2.58, 2.58, 2.58)
+    # Kd: critical damping 2*sqrt(Kp)
+    default_task_prop_gains: tuple = (100.0, 100.0, 100.0, 100.0, 100.0, 100.0)
+    default_task_deriv_gains: tuple = (20.0, 20.0, 20.0, 20.0, 20.0, 20.0)
 
     # ── Variable impedance: policy controls Kp + Kd (12D action) ───
     # Action[:6]  → Kp = base_Kp * (1 + a * gain_range)

@@ -213,6 +213,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             actions = agent.get_action(obs, is_deterministic=True)
             obs, _, dones, _ = env.step(actions)
 
+            # ── Print EE pose + impedance gains ───────────────────────
+            ee_pos = oru_env.robot.data.body_pos_w[env_idx, oru_env._ee_frame_idx].cpu().numpy()
+            target_z = oru_env.fixed_target_z
+            kp = oru_env.task_prop_gains[env_idx].cpu().numpy()
+            kd = oru_env.task_deriv_gains[env_idx].cpu().numpy()
+            print(f"Step {step_count}: EE=[{ee_pos[0]:.4f},{ee_pos[1]:.4f},{ee_pos[2]:.4f}] "
+                  f"dZ={ee_pos[2]-target_z:+.4f}")
+            print(f"         Kp=[{kp[0]:.1f},{kp[1]:.1f},{kp[2]:.1f} | {kp[3]:.1f},{kp[4]:.1f},{kp[5]:.1f}]")
+            print(f"         Kd=[{kd[0]:.1f},{kd[1]:.1f},{kd[2]:.1f} | {kd[3]:.1f},{kd[4]:.1f},{kd[5]:.1f}]")
+
             # ── Record env-0 wrench (only env) ─────────────────────
             ee_wrench_b = oru_env.robot.data.body_incoming_joint_wrench_b
             f = ee_wrench_b[env_idx, oru_env._ee_frame_idx, :3].cpu().numpy()

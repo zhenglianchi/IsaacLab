@@ -72,7 +72,7 @@ def compute_dof_torque(
     # Dead zone — suppress tiny wrenches to prevent limit-cycle oscillation
     dead_zone = dead_zone_thresholds
     if dead_zone is None:
-        dead_zone = torch.tensor([0.5, 0.5, 0.5, 0.2, 0.2, 0.2], device=device)
+        dead_zone = torch.tensor([0.1, 0.1, 0.1, 0.05, 0.05, 0.05], device=device)
     task_wrench = torch.where(
         task_wrench.abs() < dead_zone,
         torch.zeros_like(task_wrench),
@@ -85,7 +85,8 @@ def compute_dof_torque(
 
     # Nullspace — keep joints near default positions
     default_dof_pos = torch.tensor(
-        [0.0, -math.pi / 2, math.pi / 6, -math.pi / 6, -math.pi / 2, math.pi / 2],
+        [-15.60 * math.pi / 180, -82.61 * math.pi / 180, 29.85 * math.pi / 180,
+         -37.15 * math.pi / 180, -89.96 * math.pi / 180, 74.46 * math.pi / 180],
         device=device,
     ).repeat(num_envs, 1)
 
