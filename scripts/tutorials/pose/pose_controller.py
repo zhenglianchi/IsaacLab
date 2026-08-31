@@ -4,7 +4,7 @@
 import torch
 from isaaclab.controllers import DifferentialIKController, DifferentialIKControllerCfg
 from isaaclab.managers import SceneEntityCfg
-from isaaclab.utils.math import subtract_frame_transforms
+from isaaclab.utils.math import axis_angle_from_quat, subtract_frame_transforms
 # from isaaclab.markers import VisualizationMarkers
 # from isaaclab.markers.config import FRAME_MARKER_CFG
 
@@ -80,12 +80,49 @@ class UR5Controller:
         """
         ee_pose_w = self.robot.data.body_pose_w[:, self.robot_entity_cfg.body_ids[0]]
 
-        # IK command: use target position but KEEP current orientation
-        # (prevents twisting when target quat is far from current quat)
+        # IK command: reference governor — step at most max_step toward the
+        # final target each call. Small per-step error keeps the Jacobian
+        # valid and joint velocities below saturation → straight-line path.
         if target_pos.dim() == 1:
             target_pos = target_pos.unsqueeze(0).repeat(self.args_cli.num_envs, 1)
-        current_quat = ee_pose_w[:, 3:7]
-        ik_command = torch.cat([target_pos, current_quat], dim=1)
+        if target_quat.dim() == 1:
+            target_quat = target_quat.unsqueeze(0).repeat(self.args_cli.num_envs, 1)
+
+        cur_pos = ee_pose_w[:, :3]
+        cur_quat = ee_pose_w[:, 3:7]
+
+        # Position: cap step at 5mm
+        max_step = 0.005
+        err = target_pos - cur_pos
+        dist = torch.norm(err, dim=-1, keepdim=True)
+        step_pos = torch.where(
+            dist > max_step,
+            cur_pos + err / dist.clamp(min=1e-8) * max_step,
+            target_pos,
+        )
+
+        # Orientation: cap rotation at 0.02 rad per step (angle-axis)
+        max_rot = 0.02
+        from isaacsim.core.utils.torch import quat_mul as isaac_quat_mul
+        from isaacsim.core.utils.torch import quat_conjugate as isaac_quat_conj
+        from isaacsim.core.utils.torch import quat_from_angle_axis as isaac_quat_from_aa
+
+        quat_dot = (target_quat * cur_quat).sum(dim=-1, keepdim=True)
+        tq = torch.where(quat_dot >= 0, target_quat, -target_quat)
+        q_err = isaac_quat_mul(tq, isaac_quat_conj(cur_quat))
+        aa = axis_angle_from_quat(q_err)          # (N, 3) axis*angle
+        aa_angle = torch.norm(aa, dim=-1, keepdim=True)
+        aa_capped = torch.where(
+            aa_angle > max_rot,
+            aa / aa_angle.clamp(min=1e-8) * max_rot,
+            aa,
+        )
+        capped_angle = torch.norm(aa_capped, dim=-1)               # (N,)
+        capped_axis = aa_capped / capped_angle.clamp(min=1e-8).unsqueeze(-1)
+        step_delta_quat = isaac_quat_from_aa(capped_angle, capped_axis)  # (N, 4)
+        step_quat = isaac_quat_mul(step_delta_quat, cur_quat)
+
+        ik_command = torch.cat([step_pos, step_quat], dim=1)
         self.diff_ik.set_command(ik_command)
 
         # Compute Jacobian
@@ -113,6 +150,7 @@ class UR5Controller:
         # Print EE pose
         ee_pose_w = self.robot.data.body_pose_w[:, self.robot_entity_cfg.body_ids[0]]
         print(f"EE Pos: {ee_pose_w[0, :3].cpu().numpy()}  "
+              f"Quat(wxyz): {ee_pose_w[0, 3:7].cpu().numpy()}  "
               f"Target: {target_pos[0].cpu().numpy()}  "
               f"dPos: {(target_pos[0] - ee_pose_w[0, :3]).cpu().numpy()}")
 

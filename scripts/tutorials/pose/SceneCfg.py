@@ -94,14 +94,14 @@ GRIPPER_CFG = RigidObjectCfg(
 
 ORU_CFG = RigidObjectCfg(
     spawn=sim_utils.UsdFileCfg(
-        usd_path="assets/USD/o7/ORU.usd", 
+        usd_path="assets/USD/oru/ORU.usd",
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=True,
             kinematic_enabled=False,
         ),
         collision_props=sim_utils.CollisionPropertiesCfg(
-            contact_offset=0.0,
-            rest_offset=0.0,
+            contact_offset=-0.02,   # 收缩碰撞壳 2cm → 允许插入更深
+            rest_offset=-0.02,
         ),
     ),
     init_state=RigidObjectCfg.InitialStateCfg(
@@ -119,8 +119,8 @@ GROUND_CFG = RigidObjectCfg(
             kinematic_enabled=True,
         ),
         collision_props=sim_utils.CollisionPropertiesCfg(
-            contact_offset=0.0,
-            rest_offset=0.0,
+            contact_offset=-0.02,   # 收缩碰撞壳 2cm
+            rest_offset=-0.02,
         ),
     ),
     init_state=RigidObjectCfg.InitialStateCfg(
@@ -153,12 +153,12 @@ DOFBOT_CONFIG = ArticulationCfg(
 
     init_state=ArticulationCfg.InitialStateCfg(
         joint_pos={
-            "shoulder_pan_joint": 0.0,
-            "shoulder_lift_joint": -math.pi / 2,
-            "elbow_joint": math.pi / 6,
-            "wrist_1_joint": -math.pi / 6,
-            "wrist_2_joint": -math.pi / 2,
-            "wrist_3_joint": math.pi / 2,
+            "shoulder_pan_joint": -15.60 * math.pi / 180,
+            "shoulder_lift_joint": -82.61 * math.pi / 180,
+            "elbow_joint": 29.85 * math.pi / 180,
+            "wrist_1_joint": -37.15 * math.pi / 180,
+            "wrist_2_joint": -89.96 * math.pi / 180,
+            "wrist_3_joint": 74.46 * math.pi / 180,
         },
         pos=(0, 0, 0),
     ),
@@ -170,7 +170,7 @@ DOFBOT_CONFIG = ArticulationCfg(
         "shoulder_pan_joint": ImplicitActuatorCfg(
             joint_names_expr=["shoulder_pan_joint"],
             effort_limit_sim=87,
-            velocity_limit_sim=2,
+            velocity_limit_sim=0.5,
             stiffness=500,
             damping=45,
         ),
@@ -178,7 +178,7 @@ DOFBOT_CONFIG = ArticulationCfg(
         "shoulder_lift_joint": ImplicitActuatorCfg(
             joint_names_expr=["shoulder_lift_joint"],
             effort_limit_sim=87,
-            velocity_limit_sim=2,
+            velocity_limit_sim=0.5,
             stiffness=500,
             damping=45,
         ),
@@ -186,7 +186,7 @@ DOFBOT_CONFIG = ArticulationCfg(
         "elbow_joint": ImplicitActuatorCfg(
             joint_names_expr=["elbow_joint"],
             effort_limit_sim=87,
-            velocity_limit_sim=2,
+            velocity_limit_sim=0.5,
             stiffness=500,
             damping=45,
         ),
@@ -194,7 +194,7 @@ DOFBOT_CONFIG = ArticulationCfg(
         "wrist_1_joint": ImplicitActuatorCfg(
             joint_names_expr=["wrist_1_joint"],
             effort_limit_sim=87,
-            velocity_limit_sim=2,
+            velocity_limit_sim=0.5,
             stiffness=500,
             damping=45,
         ),
@@ -202,7 +202,7 @@ DOFBOT_CONFIG = ArticulationCfg(
         "wrist_2_joint": ImplicitActuatorCfg(
             joint_names_expr=["wrist_2_joint"],
             effort_limit_sim=87,
-            velocity_limit_sim=2,
+            velocity_limit_sim=0.5,
             stiffness=500,
             damping=45,
         ),
@@ -210,7 +210,7 @@ DOFBOT_CONFIG = ArticulationCfg(
         "wrist_3_joint": ImplicitActuatorCfg(
             joint_names_expr=["wrist_3_joint"],
             effort_limit_sim=87,
-            velocity_limit_sim=2,
+            velocity_limit_sim=0.5,
             stiffness=500,
             damping=45,
         ),
@@ -383,7 +383,7 @@ def add_fixed_joint(stage, args_cli):
             f"{env_ns}/Gripper/base_link/oru_joint",
             f"{env_ns}/Gripper/base_link",
             f"{env_ns}/ORU/base_link",
-            child_offset_pos=(0, 0, -0.257),
+            child_offset_pos=(0, 0, -0.305),
             child_offset_axis=(0, 0, 1),
             child_offset_angle=math.pi,
         )

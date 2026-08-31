@@ -16,7 +16,7 @@ import math
 import torch
 
 import isaacsim.core.utils.torch as torch_utils
-from pxr import UsdPhysics, Gf
+from pxr import UsdPhysics, Gf, Sdf
 
 
 # ==========================================================================
@@ -33,8 +33,15 @@ def create_one_fixed_joint(
     child_offset_quat=None,
     child_offset_axis=(0.0, 0.0, 1.0),
     child_offset_angle=0.0,
+    drive_stiffness=None,
+    drive_damping=None,
 ):
-    """Create a single PhysX FixedJoint between two prims."""
+    """Create a single PhysX FixedJoint between two prims.
+
+    drive_stiffness/drive_damping: optional PhysX joint drive (spring-damper
+    on all locked DOFs). FixedJoints yield under dynamic loads (chain whip);
+    a stiff drive makes the chain behave like a rigid rod.
+    """
     joint = UsdPhysics.FixedJoint.Define(stage, joint_path)
     joint.CreateBody0Rel().SetTargets([parent_path])
     joint.CreateBody1Rel().SetTargets([child_path])
@@ -61,6 +68,16 @@ def create_one_fixed_joint(
 
     joint.CreateBreakForceAttr().Set(1e10)
     joint.CreateBreakTorqueAttr().Set(1e10)
+
+    # Optional PhysX joint drive — stiffen the locked constraint against
+    # dynamic yield (chain whip). physxJoint:drive:* is the PhysX schema
+    # attribute set (non-custom on the prim, per SchemaRegistry probe).
+    if drive_stiffness is not None:
+        prim = joint.GetPrim()
+        prim.CreateAttribute("physxJoint:drive:stiffness", Sdf.ValueTypeNames.Double).Set(drive_stiffness)
+        prim.CreateAttribute("physxJoint:drive:damping", Sdf.ValueTypeNames.Double).Set(
+            drive_damping if drive_damping is not None else 2.0 * math.sqrt(drive_stiffness)
+        )
 
 
 def create_oru_fixed_joints(stage, num_envs: int):
@@ -108,7 +125,7 @@ def create_oru_fixed_joints(stage, num_envs: int):
             f"{env_ns}/Gripper/base_link/oru_joint",
             f"{env_ns}/Gripper/base_link",
             f"{env_ns}/ORU/base_link",
-            child_offset_pos=(0, 0, -0.257),
+            child_offset_pos=(0, 0, -0.305),
             child_offset_axis=(0, 0, 1),
             child_offset_angle=math.pi,
         )

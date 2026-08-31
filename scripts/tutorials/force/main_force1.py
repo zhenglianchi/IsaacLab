@@ -156,21 +156,22 @@ def main():
     rotated_quat = quat_multiply(quat_z_180, target_quat)
     rotated_quat = rotated_quat / np.linalg.norm(rotated_quat)  # 归一化
     
+    # 对接高度验证: 完整 6D 阻抗控制对准对接目标
+    # (XY 刚度抵抗接触横向力, 旋转刚度保持姿态)
     ee_goal_pose_set_tilted_b = torch.tensor(
         [
-            [0.4, 0, 0.536,  0, 0, 1, 0]
+            [0.4, 0, 0.35,  0, 0, 1, 0]
         ],
         device=sim.device,
     )
 
-    # High XY + Z for pushing, low rot for compliance
     kp_set_task = torch.tensor(
-        [[30.0, 30.0, 20.0, 10.0, 10.0, 10.0]],
+        [[50.0, 50.0, 200.0, 10.0, 10.0, 10.0]],
         device=sim.device,
     )
 
     kd_set_task = torch.tensor(
-        [[5.0, 5.0, 5.0, 2.0, 2.0, 2.0]],
+        [[10.0, 10.0, 10.0, 4.0, 4.0, 4.0]],
         device=sim.device,
     )
 
@@ -258,6 +259,7 @@ def main():
             ee_jacobi_idx = ee_frame_idx - 1
             jacobian = robot.root_physx_view.get_jacobians()[:, ee_jacobi_idx, :, arm_joint_ids]
             mass_matrix = robot.root_physx_view.get_generalized_mass_matrices()[:, arm_joint_ids, :][:, :, arm_joint_ids]
+            gravity = robot.root_physx_view.get_gravity_compensation_forces()[:, arm_joint_ids]
             
             # Extract target pose and gains from command
             ctrl_target_ee_pos = command[:, :3]
@@ -280,7 +282,8 @@ def main():
                 ctrl_target_ee_quat,
                 task_prop_gains,
                 task_deriv_gains,
-                sim.device
+                sim.device,
+                gravity=gravity,
             )
             
             # Apply computed torques

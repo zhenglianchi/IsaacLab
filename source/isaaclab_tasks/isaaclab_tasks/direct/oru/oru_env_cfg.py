@@ -35,6 +35,8 @@ OBS_DIM_CFG = {
     "joint_pos": 6,
     "task_prop_gains": 6,     # policy sees its variable Kp
     "task_deriv_gains": 6,    # policy sees its variable Kd
+    "applied_wrench": 6,      # commanded F/T (PD output)
+    "measured_force": 3,      # TRUE wrist reaction force (contact awareness)
 }
 
 STATE_DIM_CFG = {
@@ -47,6 +49,8 @@ STATE_DIM_CFG = {
     "ground_quat": 4,
     "task_prop_gains": 6,
     "task_deriv_gains": 6,
+    "applied_wrench": 6,
+    "measured_force": 3,
     "pos_threshold": 3,
     "rot_threshold": 3,
 }
@@ -65,7 +69,7 @@ UR5_CFG = ArticulationCfg(
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             enabled_self_collisions=True,
             solver_position_iteration_count=8,
-            solver_velocity_iteration_count=2,
+            solver_velocity_iteration_count=8,  # was 2 (effectively 1 due to global cap): contact rocking -> periodic bow-pop
         ),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
@@ -82,27 +86,27 @@ UR5_CFG = ArticulationCfg(
     actuators={
         "shoulder_pan_joint": ImplicitActuatorCfg(
             joint_names_expr=["shoulder_pan_joint"],
-            effort_limit_sim=87, velocity_limit_sim=10, stiffness=0, damping=15.0,
+            effort_limit_sim=1600, velocity_limit_sim=80, stiffness=0, damping=30.0,
         ),
         "shoulder_lift_joint": ImplicitActuatorCfg(
             joint_names_expr=["shoulder_lift_joint"],
-            effort_limit_sim=87, velocity_limit_sim=10, stiffness=0, damping=15.0,
+            effort_limit_sim=1600, velocity_limit_sim=80, stiffness=0, damping=30.0,
         ),
         "elbow_joint": ImplicitActuatorCfg(
             joint_names_expr=["elbow_joint"],
-            effort_limit_sim=87, velocity_limit_sim=10, stiffness=0, damping=15.0,
+            effort_limit_sim=1600, velocity_limit_sim=80, stiffness=0, damping=30.0,
         ),
         "wrist_1_joint": ImplicitActuatorCfg(
             joint_names_expr=["wrist_1_joint"],
-            effort_limit_sim=87, velocity_limit_sim=10, stiffness=0, damping=15.0,
+            effort_limit_sim=1600, velocity_limit_sim=80, stiffness=0, damping=30.0,
         ),
         "wrist_2_joint": ImplicitActuatorCfg(
             joint_names_expr=["wrist_2_joint"],
-            effort_limit_sim=87, velocity_limit_sim=10, stiffness=0, damping=15.0,
+            effort_limit_sim=1600, velocity_limit_sim=80, stiffness=0, damping=30.0,
         ),
         "wrist_3_joint": ImplicitActuatorCfg(
             joint_names_expr=["wrist_3_joint"],
-            effort_limit_sim=87, velocity_limit_sim=10, stiffness=0, damping=15.0,
+            effort_limit_sim=1600, velocity_limit_sim=80, stiffness=0, damping=30.0,
         ),
     },
 )
@@ -140,7 +144,7 @@ GRIPPER_CFG = RigidObjectCfg(
 
 ORU_CFG = RigidObjectCfg(
     spawn=sim_utils.UsdFileCfg(
-        usd_path="assets/USD/o7/ORU.usd",
+        usd_path="assets/USD/oru/ORU.usd",
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=True,
         ),
@@ -217,12 +221,13 @@ class OruEnvCfg(DirectRLEnvCfg):
 
     obs_order: list = [
         "ee_pos_rel_ground", "ee_quat", "ee_linvel", "ee_angvel", "joint_pos",
-        "task_prop_gains", "task_deriv_gains",
+        "task_prop_gains", "task_deriv_gains", "applied_wrench", "measured_force",
     ]
     state_order: list = [
         "ee_pos_rel_ground", "ee_quat", "ee_linvel", "ee_angvel", "joint_pos",
         "ground_pos", "ground_quat",
-        "task_prop_gains", "task_deriv_gains", "pos_threshold", "rot_threshold",
+        "task_prop_gains", "task_deriv_gains", "applied_wrench", "measured_force",
+        "pos_threshold", "rot_threshold",
     ]
 
     task: OruTaskCfg = OruTaskCfg()
@@ -237,7 +242,10 @@ class OruEnvCfg(DirectRLEnvCfg):
         physx=PhysxCfg(
             solver_type=1,
             max_position_iteration_count=192,
-            max_velocity_iteration_count=1,
+            max_velocity_iteration_count=32,  # was 1->8: under-resolved contact -> periodic pop; 8->32:
+            # FixedJoint chain (Bridge->SixForce->Gripper->ORU) constraint yields
+            # during arm motion -> ORU swings off-axis by ~4cm mid-air, missing
+            # the ground slot. More velocity iterations stiffen the chain solver.
             bounce_threshold_velocity=0.2,
             friction_offset_threshold=0.01,
             friction_correlation_distance=0.00625,

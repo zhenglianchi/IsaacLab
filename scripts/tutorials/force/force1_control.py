@@ -18,13 +18,16 @@ def compute_dof_torque(
     task_deriv_gains,
     device,
     dead_zone_thresholds=None,
+    gravity=None,
 ):
     """Compute DOF torque to move end-effector towards target pose using impedance control.
-    — synced with oru_control.py (RL version)."""
+    — synced with oru_control.py (RL version) + optional gravity compensation."""
 
     num_envs = dof_pos.shape[0]
     dof_torque = torch.zeros((num_envs, dof_pos.shape[1]), device=device)
     task_wrench = torch.zeros((num_envs, 6), device=device)
+    if gravity is not None:
+        dof_torque[:, :6] += gravity  # 重力补偿 (抵消臂杆自重)
 
     # Pose error
     pos_error, axis_angle_error = get_pose_error(
@@ -52,9 +55,9 @@ def compute_dof_torque(
         task_wrench.sign() * (task_wrench.abs() - dead_zone),
     )
 
-    # Map to joint space
+    # Map to joint space (keep gravity compensation accumulated via +=)
     jacobian_T = torch.transpose(jacobian, dim0=1, dim1=2)
-    dof_torque[:, :6] = (jacobian_T @ task_wrench.unsqueeze(-1)).squeeze(-1)
+    dof_torque[:, :6] += (jacobian_T @ task_wrench.unsqueeze(-1)).squeeze(-1)
 
     # Nullspace (hardcoded defaults — same as oru_control)
     default_dof_pos = torch.tensor(
@@ -66,8 +69,8 @@ def compute_dof_torque(
     distance_to_default = default_dof_pos - dof_pos[:, :6]
     distance_to_default = (distance_to_default + torch.pi) % (2 * torch.pi) - torch.pi
 
-    kp_null = 1.0
-    kd_null = 2.0   # critical damping (same as oru_control)
+    kp_null = 20.0  # strong posture hold for vertical-press verification
+    kd_null = 9.0   # ~2*sqrt(20) critical damping
     u_null = kd_null * (-dof_vel[:, :6]) + kp_null * distance_to_default
 
     arm_mass_matrix_inv = torch.inverse(mass_matrix)
@@ -77,8 +80,13 @@ def compute_dof_torque(
     torque_null = nullspace_proj @ (mass_matrix @ u_null.unsqueeze(-1))
     dof_torque[:, :6] += torque_null.squeeze(-1)
 
-    # Clamp
-    dof_torque = torch.clamp(dof_torque, min=-100.0, max=100.0)
+    # PHYSX TENSORS COMPENSATION (x8): omni.physics.tensors applies commanded
+    # drive effort at 1/decimation strength (verified: x8 = exact full-Newton
+    # response). Applies to ALL terms (impedance, gravity comp, nullspace).
+    dof_torque = dof_torque * 8.0
+
+    # Clamp (compensated scale: design limit 100 Nm effective = 800 commanded)
+    dof_torque = torch.clamp(dof_torque, min=-800.0, max=800.0)
     return dof_torque, task_wrench
 
 

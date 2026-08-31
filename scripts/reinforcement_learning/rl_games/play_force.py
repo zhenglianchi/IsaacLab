@@ -54,6 +54,11 @@ parser.add_argument(
 )
 # ── Max steps per episode ─────────────────────────────────────────
 parser.add_argument("--max-steps", type=int, default=500, help="Max steps to record before stopping.")
+# ── Baseline checkpoint compatibility: drop wrench obs (43D model) ──
+parser.add_argument(
+    "--no-wrench-obs", action="store_true",
+    help="Remove applied_wrench from obs/state (for baseline checkpoints trained with 43D obs).",
+)
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -122,6 +127,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     else:
         print("[INFO] No fixed IK offset provided — using random domain randomization.")
 
+    # ── Baseline compatibility: drop wrench obs (43D checkpoint) ──
+    if args_cli.no_wrench_obs:
+        env_cfg.obs_order = [k for k in env_cfg.obs_order if k != "applied_wrench"]
+        env_cfg.state_order = [k for k in env_cfg.state_order if k != "applied_wrench"]
+        print("[INFO] Dropped applied_wrench from obs/state (baseline 43D compatibility)")
+
     # ── Find checkpoint ────────────────────────────────────────────
     log_root_path = os.path.join("logs", "rl_games", agent_cfg["params"]["config"]["name"])
     log_root_path = os.path.abspath(log_root_path)
@@ -143,7 +154,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     csv_path = os.path.join(save_dir, f"wrench_data_{timestamp}.csv")
     csv_file = open(csv_path, "w", newline="", encoding="utf-8")
     csv_writer = csv.writer(csv_file)
-    csv_writer.writerow(["Step", "Fx(N)", "Fy(N)", "Fz(N)", "Tx(Nm)", "Ty(Nm)", "Tz(Nm)"])
+    csv_writer.writerow([
+        "Step", "Fx(N)", "Fy(N)", "Fz(N)", "Tx(Nm)", "Ty(Nm)", "Tz(Nm)",
+        "EE_x", "EE_y", "EE_z",
+        "Kp_x", "Kp_y", "Kp_z", "Kp_rx", "Kp_ry", "Kp_rz",
+        "Kd_x", "Kd_y", "Kd_z", "Kd_rx", "Kd_ry", "Kd_rz",
+    ])
     print(f"[INFO] Wrench data → {csv_path}")
 
     # ── Create environment ─────────────────────────────────────────
@@ -223,7 +239,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             print(f"         Kp=[{kp[0]:.1f},{kp[1]:.1f},{kp[2]:.1f} | {kp[3]:.1f},{kp[4]:.1f},{kp[5]:.1f}]")
             print(f"         Kd=[{kd[0]:.1f},{kd[1]:.1f},{kd[2]:.1f} | {kd[3]:.1f},{kd[4]:.1f},{kd[5]:.1f}]")
 
-            # ── Record env-0 wrench (only env) ─────────────────────
+            # ── Record wrench + EE pose + impedance gains ──────────
             ee_wrench_b = oru_env.robot.data.body_incoming_joint_wrench_b
             f = ee_wrench_b[env_idx, oru_env._ee_frame_idx, :3].cpu().numpy()
             t = ee_wrench_b[env_idx, oru_env._ee_frame_idx, 3:6].cpu().numpy()
@@ -231,6 +247,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 step_count,
                 f"{f[0]:.6f}", f"{f[1]:.6f}", f"{f[2]:.6f}",
                 f"{t[0]:.6f}", f"{t[1]:.6f}", f"{t[2]:.6f}",
+                f"{ee_pos[0]:.6f}", f"{ee_pos[1]:.6f}", f"{ee_pos[2]:.6f}",
+                f"{kp[0]:.4f}", f"{kp[1]:.4f}", f"{kp[2]:.4f}",
+                f"{kp[3]:.4f}", f"{kp[4]:.4f}", f"{kp[5]:.4f}",
+                f"{kd[0]:.4f}", f"{kd[1]:.4f}", f"{kd[2]:.4f}",
+                f"{kd[3]:.4f}", f"{kd[4]:.4f}", f"{kd[5]:.4f}",
             ])
 
             if len(dones) > 0:

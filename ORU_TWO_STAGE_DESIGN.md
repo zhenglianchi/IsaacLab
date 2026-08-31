@@ -284,19 +284,23 @@ R_stage2 权重 ↑
 
 ## 五、观测增强
 
-为支持两阶段感知，观测新增：
+为支持两阶段感知，观测新增 **仅 1 项**：
 
 ```python
 obs_dict = {
     ...现有 31D...,
-    "applied_wrench": self.applied_wrench,     # 6D 力/力矩反馈
-    "contact_degree": contact_degree,           # 1D 接触程度 (sigmoid)
-    "pos_error": target_pos - ee_pos,           # 3D 位置误差
+    "applied_wrench": self.applied_wrench,     # 6D 力/力矩反馈 (核心新增)
 }
-# 共 41D (+10D) → policy 观测 53D
+# 共 37D (+6D) → policy 观测 43D → 49D (含 12D prev_actions)
 ```
 
 > 参考 Yuan 2026: 触觉传感器增强接触感知。我们用 force/torque 估计替代触觉传感器。
+
+**为什么不加 `contact_degree` 和 `pos_error`？**
+- `contact_degree` = sigmoid(Fz)，是 `applied_wrench` 的非线性变换，策略带 LSTM 能从力时序自己学出接触状态，手动喂入反而诱导策略依赖该特征、降低泛化性
+- `pos_error` = `ee_pos_rel_ground` - [0,0,0.436]，是现有观测的线性变换，信息完全重复
+
+后续如果实验发现力平滑不够，再考虑加力变化率 ΔF (3D)，但优先不加，让 LSTM 自己学时序特征。
 
 ---
 
@@ -320,7 +324,7 @@ obs_dict = {
 | 1 | `oru_env.py` | 新增 `_get_path_keypoints()` 生成阶段1关键点 |
 | 2 | `oru_env.py` | 重写 `_get_rewards()` 为两阶段结构 |
 | 3 | `oru_env.py` | 新增 `_get_contact_state()` 接触检测 + 滞后 |
-| 4 | `oru_env.py` | 新增 `_get_observations()` 增强 (加力 + 接触标志) |
+| 4 | `oru_env.py` | 观测新增 `applied_wrench` 6D (OBS_DIM_CFG + obs_order 同步) |
 | 5 | `oru_tasks_cfg.py` | 新增阶段 2 精调参数 (a_fine=50, force_threshold, 等) |
 | 6 | `oru_env_cfg.py` | 更新 OBS_DIM_CFG + obs_order |
 | 7 | 实验 | Baseline vs +路径 vs +分段 vs 完整 (4 组对照) |
