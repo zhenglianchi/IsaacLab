@@ -4,3 +4,7 @@
 # Python cache
 __pycache__/
 *.pyc
+
+# Generated artifacts
+force_data_logs/
+outputs/
