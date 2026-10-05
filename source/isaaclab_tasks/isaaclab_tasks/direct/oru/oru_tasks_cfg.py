@@ -18,7 +18,7 @@ class OruTaskCfg:
 
     # ── Task identity ──────────────────────────────────────────────
     name: str = "oru_assembly"
-    duration_s: float = 15.0
+    duration_s: float = 60.0  # unused; kept in sync with OruEnvCfg.episode_length_s
 
     # ── Fixed target pose (world frame) ────────────────────────────
     # Position [0.4, 0, 0] + Quaternion [0, 0, 1, 0] (wxyz, 180° around Y)
@@ -27,10 +27,44 @@ class OruTaskCfg:
     #
     # Z = 0.4297: EE height when the ORU is fully docked.
     # ORU seated Z = 0.03742 + chain offset -0.39230 → EE Z = 0.42972.
-    target_pos: tuple = (0.4, 0.0, 0.4297)
+    target_pos: tuple = (0.4, 0.0, 0.4298)
     target_quat: tuple = (0.0, 0.0, 1.0, 0.0)
     # Success height (EE Z, world): ORU fully docked.
-    success_z: float = 0.42972
+    success_z: float = 0.4298
+
+    # v2 pilot parameters, to be calibrated on validation runs before the suite.
+    experiment_method: str = "full"  # full/single/no_path/no_stage/hard_switch/fixed
+    preinsert_height: float = 0.08  # above the physical seat, NOT a new success height
+    entry_xy_tolerance: float = 0.003
+    entry_angle_tolerance: float = 0.035  # radians, approximately 2 degrees
+    entry_height_tolerance: float = 0.005
+    entry_confirm_steps: int = 3
+    switch_duration_s: float = 0.3
+    reference_speed: float = 0.02  # m/s, maximum axial reference motion
+    insertion_bias: float = 0.01  # virtual equilibrium below seat, contact-gated
+    fixed_stage_weight: float = 0.5  # no_stage ablation
+    # Steady downward preload (N) applied once the ORU is geometrically seated and
+    # the feedback gains are frozen. Zeroing the gains alone is not enough: the ORU
+    # was only held in the seat by the controller's downward push, and with the
+    # chain weightless nothing pulls it back down, so it floats up until the
+    # contact penetration allowance is consumed. A constant force holds it seated
+    # without position feedback, so it cannot pump the spring/contact limit cycle
+    # that the bouncing came from.
+    hold_force: float = 3.0
+    torque_scale: float = 1.0  # no assumed inverse-decimation compensation
+    joint_torque_limit: float = 100.0
+    oru_seat_z: float = 0.03750  # = success_z 0.4298 - measured chain offset 0.39230
+    # (2026-10-05: was the legacy 0.03742; re-derived from the EE success height the
+    #  penetration-calibrated run actually reaches, so the ORU criterion matches it.)
+    oru_seat_quat: tuple = (0.0, 1.0, 0.0, 0.0)
+    seat_z_tolerance: float = 0.002
+    seat_angle_tolerance: float = 0.035
+    success_hold_s: float = 0.3
+    success_speed_tolerance: float = 0.01
+    success_angular_speed_tolerance: float = 0.05  # rad/s
+    ik_iterations: int = 20
+    ik_position_tolerance: float = 0.002
+    ik_angle_tolerance: float = 0.0175
 
     # ── Domain randomization: IK noise (reset-time only) ───────────
     # At each reset, we:
@@ -40,8 +74,8 @@ class OruTaskCfg:
     #   4. Write those joints as the initial state
     # The target pose NEVER changes — policy learns to reach the same goal
     # from different starting configurations.
-    ik_rand_pos_noise: tuple = (0.12, 0.12, 0.12)          # ±12cm EE position noise
-    ik_rand_rot_noise: tuple = (0.052, 0.052, 0.052)       # ±3° (0.052rad)
+    ik_rand_pos_noise: tuple = (0.01, 0.01, 0.01)  # pilot: ±1cm; enlarge after validation
+    ik_rand_rot_noise: tuple = (0.01745, 0.01745, 0.01745)  # pilot: ±1 degree per axis
 
     # ── Fixed IK offset for single-case evaluation ──────────────────
     # When set (not None), overrides random noise. Used by play_force.py.
@@ -79,39 +113,41 @@ class OruTaskCfg:
     deviation_weight: float = 2.0
 
     # ── Two-stage reward: stage 2 precision + force compliance ─────
-    precision_a: float = 150.0                 # exp(-150·d): reward fires only within
-                                               # the last cm of the insertion
-    log_reward_coef: float = 0.8               # -coef*log(dist): steepest gradient at
-                                               # dist→0 (∂r/∂d = -coef/d)
-    z_progress_weight: float = 40.0            # reward downward motion
+    # Reward units per meter of NEW best insertion depth (1mm -> +0.5).
+    z_progress_weight: float = 500.0
+    insertion_time_penalty: float = 2.5  # per control step before stable success
+    insertion_xy_weight: float = 0.5    # cost at one XY tolerance
+    insertion_angle_weight: float = 0.5 # cost at one angle tolerance
     force_smooth_weight: float = 0.005         # ΔF penalty
     force_peak_threshold: float = 60.0         # force safety limit (N) — aligned with
                                                # max_task_force_z so the required
                                                # >50N insertion force is not taxed
     force_peak_weight: float = 0.01            # squared penalty above limit
     lateral_force_weight: float = 0.1          # XY force penalty (anti-rubbing)
-    z_force_target: float = 2.0                # desired downward force (N)
-    z_force_weight: float = 0.001              # deviation penalty around target
-    # Depth-gap pressure for the last cm (position-level, complements the
-    # velocity-level z_progress): keeps a gradient when contact stalls the
-    # EE — "close but parked" is worse than "pushing in".
-    z_depth_weight: float = 50.0               # 1cm above tolerance → -0.5/step
-    z_gap_tolerance: float = 0.005             # 5mm residual gap is fine (slack)
+    z_force_target: float = -2.0               # world -Z is downward
+    z_force_weight: float = 0.0                # disable uncalibrated commanded-force target
+    # Actual ORU height error outside the SAME +/-2mm success band.
+    z_depth_weight: float = 100.0  # 1cm residual gap -> -0.8 per control step
 
-    # ── Stage 1 approach: potential-based distance shaping ─────────
+    # ── Stage 1 approach: distance-progress shaping ────────────────
     # r_approach = approach_weight * (d_{t-1} - d_t): rewards EVERY cm of
     # closing distance so the long middle of the descent carries a gradient.
     approach_weight: float = 5.0
 
     # ── Stage switch: contact detection + soft transition ──────────
-    contact_force_threshold: float = 0.5       # F_mag > this → contact (N).
-                                               # Above the free-space
-                                               # chain-inertia band (>0.5N)
-    contact_height_threshold: float = 0.05     # within 5cm of target height
-    contact_surge_delta: float = 0.2           # force surge for first contact
-    contact_surge_force: float = 0.5           # surge must exceed this
-    contact_sigmoid_slope: float = 10.0        # soft-transition slope
-    contact_leave_threshold: float = 0.1       # hysteresis: Fz must drop below to leave
+    # Applied to the FILTERED ORU<->Ground contact force from the ContactSensor
+    # (OruSceneCfg.Contact), which reads ~0 while airborne. Do NOT feed the wrist
+    # reaction here: free-space chain inertia is 3.9-5.9 N and the seated bounce
+    # 2.2-10.3 N, so a 0.5 N threshold "confirms contact" 82 mm above the seat.
+    contact_force_threshold: float = 0.5       # contact force > this -> touching (N)
+    contact_leave_threshold: float = 0.1       # hysteresis: must drop below to leave
+    # UNUSED legacy knobs (kept only so old config dumps still load). The wrist-force
+    # surge/sigmoid scheme they belong to was replaced by the contact sensor above;
+    # nothing reads these - do not tune them expecting an effect.
+    contact_height_threshold: float = 0.05
+    contact_surge_delta: float = 0.2
+    contact_surge_force: float = 0.5
+    contact_sigmoid_slope: float = 10.0
 
     # ── Action penalties ───────────────────────────────────────────
     action_penalty_scale: float = 0.01         # L2 norm of action

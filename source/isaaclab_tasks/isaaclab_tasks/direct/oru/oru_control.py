@@ -43,6 +43,7 @@ def compute_dof_torque(
     dead_zone_thresholds: torch.Tensor | None = None,
     gravity_comp: torch.Tensor | None = None,
     z_force_limit: torch.Tensor | None = None,
+    task_force_ff: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute UR5 DOF torque to move end-effector towards target pose.
 
@@ -53,6 +54,12 @@ def compute_dof_torque(
             (disable_gravity=True) but the chain+ORU weight hangs on the
             wrist — compensate it so the wrist can hover without fighting
             the load (and so the wrench clamp is not consumed by it).
+        task_force_ff: (num_envs, 6) constant task-space wrench added on top of
+            the PD output, in the same (world) frame. Used to keep a steady
+            downward preload on a seated ORU once the feedback gains are zeroed:
+            the preload has no position feedback, so it cannot pump the
+            spring/contact limit cycle, while still holding the part in the seat
+            (nothing else pushes down - the chain is weightless).
 
     Returns:
         dof_torque: (num_envs, num_joints) joint torques.
@@ -61,8 +68,6 @@ def compute_dof_torque(
     num_envs = dof_pos.shape[0]
     dof_torque = torch.zeros((num_envs, dof_pos.shape[1]), device=device)
     task_wrench = torch.zeros((num_envs, 6), device=device)
-    if gravity_comp is not None:
-        dof_torque[:, :6] += gravity_comp
 
     # Pose error
     pos_error, axis_angle_error = get_pose_error(
@@ -79,6 +84,11 @@ def compute_dof_torque(
     task_wrench += task_space_pd(
         delta_ee_pose, ee_linvel, ee_angvel, task_prop_gains, task_deriv_gains
     )
+
+    # Constant task-space feed-forward (seated preload). Added before the dead zone
+    # and the per-axis clamp so both still apply to the total wrench.
+    if task_force_ff is not None:
+        task_wrench += task_force_ff
 
     # Dead zone — suppress tiny wrenches to prevent limit-cycle oscillation
     dead_zone = dead_zone_thresholds
@@ -109,13 +119,12 @@ def compute_dof_torque(
     jacobian_T = torch.transpose(jacobian, dim0=1, dim1=2)
     dof_torque[:, :6] = (jacobian_T @ task_wrench.unsqueeze(-1)).squeeze(-1)
 
-    # PHYSX TENSORS COMPENSATION (x8): omni.physics.tensors applies the
-    # commanded drive effort at 1/decimation strength, so scale the
-    # commanded torque by the decimation factor.
-    dof_torque = dof_torque * 8.0
-
-    # Clamp (compensated scale: design limit 100 Nm effective = 800 commanded)
-    dof_torque = torch.clamp(dof_torque, min=-800.0, max=800.0)
+    # _apply_action runs EVERY physics substep. Decimation is not a torque scale.
+    dof_torque *= cfg.task.torque_scale
+    if gravity_comp is not None:
+        dof_torque[:, :6] += gravity_comp
+    limit = cfg.task.joint_torque_limit
+    dof_torque = torch.clamp(dof_torque, min=-limit, max=limit)
     return dof_torque, task_wrench
 
 

@@ -38,7 +38,7 @@ INSTALL_REQUIRES = [
     # make sure this is consistent with isaac sim version
     "pillow==11.3.0",
     # livestream
-    "starlette==0.49.1",
+    "starlette==0.45.3",  # Isaac Sim 5.1's FastAPI 0.115.7 requires Starlette <0.46.
     # testing
     "pytest",
     "pytest-mock",

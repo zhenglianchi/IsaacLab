@@ -8,3 +8,6 @@ __pycache__/
 # Generated artifacts
 force_data_logs/
 outputs/
+
+# Local pip installation wheels and validation logs
+.installation/

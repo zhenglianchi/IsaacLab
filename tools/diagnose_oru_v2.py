@@ -1,0 +1,231 @@
+"""Checkpoint-free fixed-impedance pilot and reset-isolation regression check."""
+import argparse
+import csv
+import json
+import math
+import os
+import time
+from pathlib import Path
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--num-envs', type=int, default=64)
+parser.add_argument('--steps', type=int, default=225)
+parser.add_argument('--nominal', action='store_true')
+parser.add_argument('--bias', type=float, default=0.01)
+parser.add_argument('--max-force', type=float, default=None,
+                    help='override cfg.task.max_task_force (free-space XY/Z cap, default 8 N); lower = gentler approach')
+parser.add_argument('--max-force-z', type=float, default=None,
+                    help='override cfg.task.max_task_force_z (default 60 N) to push harder than the cap')
+parser.add_argument('--reference-speed', type=float, default=None,
+                    help='override cfg.task.reference_speed in m/s (default 0.02); the anchor ramps at this rate')
+parser.add_argument('--friction', type=float, default=None,
+                    help='override static/dynamic friction (defaults 1.0/1.0). mu=1.0 -> 45 deg friction cone: self-locking')
+parser.add_argument('--kp-scale', type=float, default=1.0,
+                    help='scale all task Kp (default 1.0). Stiffer -> more force AND more oscillation')
+parser.add_argument('--kd-scale', type=float, default=1.0,
+                    help='scale all task Kd (default 1.0). Over-damping is the documented anti-limit-cycle lever')
+parser.add_argument('--ground-drop', type=float, default=0.0,
+                    help='lower the docking surface by this many metres ON TOP of the configured value '
+                         '(positive = deeper effective hole / more penetration). Success is TWO-SIDED: '
+                         '|gap| < seat_z_tolerance, so overshooting fails too - aim for oru_z ~= oru_seat_z')
+parser.add_argument('--oru-usd', type=str, default=None,
+                    help='override cfg.scene.ORU.spawn.usd_path (e.g. assets/USD/oru_sdf0/ORU.usd) to A/B '
+                         'collision approximations without editing the task config')
+parser.add_argument('--max-torque', type=float, default=None,
+                    help='override cfg.task.max_task_torque in Nm (default 6.0). The pin/hole fit here is '
+                         'line-to-line (2.5 mm pin in 2.6 mm hole): a 1.5 deg tilt displaces the tip ~7x the '
+                         'clearance, and with mu=1.0 that wedge self-locks - rotational authority is the lever')
+parser.add_argument('--penetration', type=float, default=0.0,
+                    help='collision penetration allowance in metres: sets rest_offset = -penetration on the ORU, '
+                         'so PhysX lets the two collision surfaces overlap by that much before they rest. '
+                         'This is a real contact allowance, not a frame translation. Caveat: it applies in every '
+                         'direction, so once it exceeds the pin radius (2.5 mm) the pin/hole lateral contact is gone')
+parser.add_argument('--hold-force', type=float, default=None,
+                    help='override cfg.task.hold_force in N (default 3.0): the constant downward preload applied '
+                         'once the ORU is geometrically seated and the feedback gains are frozen. Zeroing the '
+                         'gains alone lets the ORU float up (nothing pulls the weightless chain down)')
+parser.add_argument('--output', default='.installation/oru_v2_diagnostic')
+parser.add_argument('--head', action='store_true', help='open the Isaac Sim viewer instead of running headless')
+parser.add_argument('--real-time', action='store_true', help='pace steps at the 15 Hz policy rate for viewing')
+args = parser.parse_args()
+root = Path(__file__).resolve().parents[1]
+os.chdir(root)
+from isaaclab.app import AppLauncher
+launcher = AppLauncher(headless=not args.head)
+env = None
+try:
+    import gymnasium as gym
+    import torch
+    import isaaclab_tasks
+    from isaaclab_tasks.utils import parse_env_cfg
+    from isaaclab.utils.math import quat_apply
+    cfg = parse_env_cfg('Isaac-Oru-Direct-v0', device='cuda:0', num_envs=args.num_envs)
+    cfg.seed = 1234
+    cfg.task.experiment_method = 'fixed'
+    if args.ground_drop:
+        gx, gy, gz = cfg.scene.Ground.init_state.pos
+        cfg.scene.Ground.init_state.pos = (gx, gy, gz - args.ground_drop)
+        print(f'[INFO] Ground dropped by {args.ground_drop * 1000:.1f} mm -> z={gz - args.ground_drop:.5f} '
+              f'(configured {gz:.5f}); ORU seat reference stays {cfg.task.oru_seat_z:.5f}', flush=True)
+    if args.oru_usd:
+        cfg.scene.ORU.spawn.usd_path = args.oru_usd
+        print(f'[INFO] ORU asset -> {args.oru_usd}', flush=True)
+    if args.penetration:
+        if cfg.scene.ORU.spawn.collision_props is None:
+            from isaaclab.sim.schemas import schemas_cfg
+            cfg.scene.ORU.spawn.collision_props = schemas_cfg.CollisionPropertiesCfg()
+        cfg.scene.ORU.spawn.collision_props.rest_offset = -abs(args.penetration)
+        # PhysX: PxShape::setContactOffset requires contactOffset > 0 AND > restOffset.
+        if not cfg.scene.ORU.spawn.collision_props.contact_offset:
+            cfg.scene.ORU.spawn.collision_props.contact_offset = 0.02
+        print(f'[INFO] ORU penetration allowance = {abs(args.penetration) * 1000:.1f} mm '
+              f'(rest_offset = {cfg.scene.ORU.spawn.collision_props.rest_offset}, '
+              f'contact_offset = {cfg.scene.ORU.spawn.collision_props.contact_offset})', flush=True)
+    cfg.task.insertion_bias = args.bias
+    if args.max_force is not None:
+        cfg.task.max_task_force = args.max_force
+    if args.max_torque is not None:
+        cfg.task.max_task_torque = args.max_torque
+    if args.hold_force is not None:
+        cfg.task.hold_force = args.hold_force
+    if args.max_force_z is not None:
+        cfg.task.max_task_force_z = args.max_force_z
+    if args.reference_speed is not None:
+        cfg.task.reference_speed = args.reference_speed
+    if args.friction is not None:
+        cfg.sim.physics_material.static_friction = args.friction
+        cfg.sim.physics_material.dynamic_friction = args.friction
+    if args.kp_scale != 1.0:
+        cfg.task.default_task_prop_gains = tuple(g * args.kp_scale for g in cfg.task.default_task_prop_gains)
+    if args.kd_scale != 1.0:
+        cfg.task.default_task_deriv_gains = tuple(g * args.kd_scale for g in cfg.task.default_task_deriv_gains)
+    if args.nominal:
+        cfg.task.fixed_ik_offset_pos = (0., 0., 0.)
+    env = gym.make('Isaac-Oru-Direct-v0', cfg=cfg)
+    obs, _ = env.reset()
+    task = env.unwrapped
+    assert obs['policy'].shape == (args.num_envs, 57)
+    # Resetting one environment must not advance time or move any other body.
+    if args.num_envs > 1:
+        before = [a.data.root_state_w[1:].clone() for a in (task.robot, task.oru)]
+        joint_before = task.robot.data.joint_pos[1:].clone()
+        time_before = task.sim.current_time
+        task._reset_idx(torch.tensor([0], device=task.device))
+        assert task.sim.current_time == time_before, 'Partial reset advanced physics time'
+        for asset, state in zip((task.robot, task.oru), before):
+            assert torch.allclose(asset.data.root_state_w[1:], state, atol=1e-6), 'Partial reset moved another env'
+        assert torch.allclose(task.robot.data.joint_pos[1:], joint_before, atol=1e-6)
+    print('RESET ISOLATION PASS', flush=True)
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    success = torch.zeros(args.num_envs, dtype=torch.bool, device=task.device)
+    max_force = 0.
+    min_oru_z = float("inf")
+    min_oru_step = -1
+    max_streak = 0
+    seat = float(cfg.task.oru_seat_z)
+    ee_seat = float(cfg.task.success_z)
+    print(f"[INFO] targets: oru_seat_z={seat:.5f}  ee success_z={ee_seat:.5f}  "
+          f"tolerances: xy {cfg.task.xy_tolerance * 1000:.2f} mm, gap {cfg.task.seat_z_tolerance * 1000:.2f} mm, "
+          f"tilt {cfg.task.seat_angle_tolerance:.4f} rad, spd {cfg.task.success_speed_tolerance}, "
+          f"angspd {cfg.task.success_angular_speed_tolerance}", flush=True)
+    with output.with_suffix('.csv').open('w', newline='', encoding='utf-8') as handle:
+        writer = csv.writer(handle)
+        writer.writerow(['step','env','ee_z','ee_x','ee_y','oru_z','oru_x','oru_y','xy_error','angle_rad','gap_to_seat_m',
+                         'phase','alpha','contact_alpha','reference_z',
+                         'kp_z','command_fz','wrist_fx_world','wrist_fy_world','wrist_fz_world','stable_success',
+                         'oru_spd_m_s','oru_angspd_rad_s','cand','succ_count',
+                         'oru_wx','oru_wy','oru_wz','oru_qw','oru_qx','oru_qy','oru_qz',
+                         'contact_force_N'])
+        for step in range(args.steps):
+            loop_start = time.time()
+            obs, reward, terminated, truncated, info = env.step(torch.zeros(env.action_space.shape, device=task.device))
+            assert torch.isfinite(obs['policy']).all() and torch.isfinite(reward).all()
+            force = quat_apply(task.ee_quat, task.robot.data.body_incoming_joint_wrench_b[:, task._ee_frame_idx, :3])
+            max_force = max(max_force, torch.linalg.vector_norm(force, dim=-1).max().item())
+            success |= task.ep_succeeded
+            xy = torch.linalg.vector_norm(task.oru.data.root_pos_w[:, :2] - task.ground.data.root_pos_w[:, :2], dim=-1)
+            _xy_dbg, gap_dbg, angle_dbg = task._oru_pose_errors()
+            cand_now = task._get_curr_successes(task.cfg.task.success_threshold)
+            z_now = float(task.oru.data.root_pos_w[0, 2])
+            if z_now < min_oru_z:
+                min_oru_z, min_oru_step = z_now, step
+            max_streak = max(max_streak, int(task._success_count[0].item()))
+            # live readout: watch the seated height while the viewer runs
+            if step % 50 == 0 or step == args.steps - 1:
+                print(f"[step {step:4d}] ee_z={float(task.ee_pos[0, 2]):.5f}  oru_z={z_now:.5f}  "
+                      f"oru-target={float(gap_dbg[0].item()) * 1000:+6.2f} mm  "
+                      f"tilt={float(angle_dbg[0].item()):.4f} rad  xy={float(xy[0].item()) * 1000:.2f} mm  "
+                      f"cand={int(cand_now[0].item())}  streak={int(task._success_count[0].item())}"
+                      f"  phase={int(task._insertion_phase[0].item())}  contact={float(task._contact_alpha[0].item()):.2f}"
+                      f"  Fcontact={float(task._get_contact_force_mag()[0].item()):.3f} N",
+                      flush=True)
+            rows = torch.stack((task.ee_pos[:, 2], task.ee_pos[:, 0], task.ee_pos[:, 1],
+                                task.oru.data.root_pos_w[:, 2],
+                                task.oru.data.root_pos_w[:, 0], task.oru.data.root_pos_w[:, 1],
+                                xy, angle_dbg, gap_dbg,
+                                task._insertion_phase.float(), task._stage_alpha, task._contact_alpha, task._control_z,
+                                task.task_prop_gains[:, 2], task.applied_wrench[:, 2], force[:, 0], force[:, 1], force[:, 2],
+                                task._stable_success.float(),
+                                torch.linalg.vector_norm(task.oru.data.root_lin_vel_w, dim=-1),
+                                torch.linalg.vector_norm(task.oru.data.root_ang_vel_w, dim=-1),
+                                cand_now.float(),
+                                task._success_count.float(),
+                                task.oru.data.root_ang_vel_w[:, 0], task.oru.data.root_ang_vel_w[:, 1],
+                                task.oru.data.root_ang_vel_w[:, 2],
+                                task.oru.data.root_quat_w[:, 0], task.oru.data.root_quat_w[:, 1],
+                                task.oru.data.root_quat_w[:, 2], task.oru.data.root_quat_w[:, 3],
+                                task._get_contact_force_mag()),
+                           dim=1).cpu().tolist()
+            # Autoreset rows are a new initial state; omit rather than mislabel terminal data.
+            reset_ids = (terminated | truncated).cpu().tolist()
+            for env_id, row in enumerate(rows):
+                if not reset_ids[env_id]:
+                    writer.writerow([step, env_id, *row])
+            if args.real_time:
+                sleep_time = task.step_dt - (time.time() - loop_start)
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+    final_oru = float(task.oru.data.root_pos_w[0, 2])
+    final_ee = float(task.ee_pos[0, 2])
+    hold = math.ceil(cfg.task.success_hold_s / task.step_dt)
+    print("\n================ SEAT CHECK ================", flush=True)
+    print(f"  ORU target (oru_seat_z) : {seat:.5f}", flush=True)
+    print(f"  ORU lowest reached      : {min_oru_z:.5f} at step {min_oru_step}  "
+          f"gap {(min_oru_z - seat) * 1000:+6.2f} mm  -> "
+          f"{'PASS' if abs(min_oru_z - seat) < cfg.task.seat_z_tolerance else 'FAIL (|gap| >= 2 mm)'}", flush=True)
+    print(f"  ORU final               : {final_oru:.5f}  gap {(final_oru - seat) * 1000:+6.2f} mm", flush=True)
+    print(f"  EE  target (success_z)  : {ee_seat:.5f}", flush=True)
+    print(f"  EE  final               : {final_ee:.5f}  diff {(final_ee - ee_seat) * 1000:+6.2f} mm", flush=True)
+    print(f"  stable_success          : {bool(success.any().item())}  "
+          f"(longest cand streak {max_streak} steps, needs {hold})", flush=True)
+    print("===========================================", flush=True)
+
+    summary = {'num_envs':args.num_envs, 'steps':args.steps, 'nominal':args.nominal, 'bias_m':args.bias,
+               'penetration_m':args.penetration, 'oru_usd':args.oru_usd,
+               'oru_seat_target_m':seat, 'oru_lowest_m':min_oru_z, 'oru_final_m':final_oru,
+               'gap_to_target_mm':(min_oru_z - seat) * 1000, 'ee_final_m':final_ee,
+               'max_cand_streak_steps':max_streak,
+               'max_task_force_z_N':float(cfg.task.max_task_force_z), 'max_task_force_N':float(cfg.task.max_task_force),
+               'reference_speed_m_s':float(cfg.task.reference_speed),
+               'friction':float(cfg.sim.physics_material.static_friction),
+               'kp_z_N_per_m':float(cfg.task.default_task_prop_gains[2]),
+               'kd_z_Ns_per_m':float(cfg.task.default_task_deriv_gains[2]),
+               'ever_success_fraction_observed':success.float().mean().item(),
+               'max_wrist_force_policy_samples_N':max_force,
+               'note':'Pilot only: wrist reaction is not isolated contact force; policy-rate samples miss substep peaks.'}
+    output.with_suffix('.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')
+    print('DIAGNOSTIC PASS ' + json.dumps(summary), flush=True)
+except BaseException:
+    import traceback
+    traceback.print_exc()
+    raise
+finally:
+    from isaaclab.sim import SimulationContext
+    sim = SimulationContext.instance()
+    if sim is not None:
+        sim.clear_all_callbacks()
+        sim.clear_instance()
+    if env is not None:
+        env.close()
+    launcher.app.close(wait_for_replicator=False)

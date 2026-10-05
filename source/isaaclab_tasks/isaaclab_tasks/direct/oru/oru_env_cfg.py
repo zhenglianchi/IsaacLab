@@ -16,6 +16,7 @@ from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 from isaaclab.envs import DirectRLEnvCfg
 from isaaclab.scene import InteractiveSceneCfg
+from isaaclab.sensors import ContactSensorCfg
 from isaaclab.sim import PhysxCfg, SimulationCfg
 from isaaclab.sim.spawners.materials.physics_materials_cfg import RigidBodyMaterialCfg
 from isaaclab.utils import configclass
@@ -28,6 +29,7 @@ from .oru_tasks_cfg import OruTaskCfg
 # ==========================================================================
 
 OBS_DIM_CFG = {
+    "stage_state": 5,
     "ee_pos_rel_ground": 3,
     "ee_quat": 4,
     "ee_linvel": 3,
@@ -40,6 +42,7 @@ OBS_DIM_CFG = {
 }
 
 STATE_DIM_CFG = {
+    "stage_state": 5,
     "ee_pos_rel_ground": 3,
     "ee_quat": 4,
     "ee_linvel": 3,
@@ -86,27 +89,27 @@ UR5_CFG = ArticulationCfg(
     actuators={
         "shoulder_pan_joint": ImplicitActuatorCfg(
             joint_names_expr=["shoulder_pan_joint"],
-            effort_limit_sim=1600, velocity_limit_sim=80, stiffness=0, damping=30.0,
+            effort_limit_sim=1600, velocity_limit_sim=80, stiffness=0, damping=1.0,
         ),
         "shoulder_lift_joint": ImplicitActuatorCfg(
             joint_names_expr=["shoulder_lift_joint"],
-            effort_limit_sim=1600, velocity_limit_sim=80, stiffness=0, damping=30.0,
+            effort_limit_sim=1600, velocity_limit_sim=80, stiffness=0, damping=1.0,
         ),
         "elbow_joint": ImplicitActuatorCfg(
             joint_names_expr=["elbow_joint"],
-            effort_limit_sim=1600, velocity_limit_sim=80, stiffness=0, damping=30.0,
+            effort_limit_sim=1600, velocity_limit_sim=80, stiffness=0, damping=1.0,
         ),
         "wrist_1_joint": ImplicitActuatorCfg(
             joint_names_expr=["wrist_1_joint"],
-            effort_limit_sim=1600, velocity_limit_sim=80, stiffness=0, damping=30.0,
+            effort_limit_sim=1600, velocity_limit_sim=80, stiffness=0, damping=1.0,
         ),
         "wrist_2_joint": ImplicitActuatorCfg(
             joint_names_expr=["wrist_2_joint"],
-            effort_limit_sim=1600, velocity_limit_sim=80, stiffness=0, damping=30.0,
+            effort_limit_sim=1600, velocity_limit_sim=80, stiffness=0, damping=1.0,
         ),
         "wrist_3_joint": ImplicitActuatorCfg(
             joint_names_expr=["wrist_3_joint"],
-            effort_limit_sim=1600, velocity_limit_sim=80, stiffness=0, damping=30.0,
+            effort_limit_sim=1600, velocity_limit_sim=80, stiffness=0, damping=1.0,
         ),
     },
 )
@@ -149,8 +152,18 @@ ORU_CFG = RigidObjectCfg(
             disable_gravity=True,
         ),
         collision_props=sim_utils.CollisionPropertiesCfg(
-            contact_offset=0.0, rest_offset=0.0,
+            # PhysX requires contactOffset > 0 and > restOffset.
+            # rest_offset is a real contact allowance (negative = the two collision
+            # surfaces may overlap by that much before they rest). 0.5 mm is what it
+            # takes for this ORU/pin to seat: with 0.0 the pin/hole pair stops ~6 mm
+            # short of oru_seat_z. The asset must stay NON-instanceable for this to
+            # take effect - with make_instanceable=True the mesh sits behind a USD
+            # instance prototype and apply_nested() cannot author onto it, so the
+            # override is silently dropped (see ORU_EXPERIMENT_PLAN.md 3.3).
+            contact_offset=0.02, rest_offset=-0.0005,
         ),
+        # required for the ORU<->Ground ContactSensor to report anything
+        activate_contact_sensors=True,
     ),
     init_state=RigidObjectCfg.InitialStateCfg(pos=(0, 0, 0), rot=(1, 0, 0, 0)),
 )
@@ -162,10 +175,20 @@ GROUND_CFG = RigidObjectCfg(
             disable_gravity=True, kinematic_enabled=True,
         ),
         collision_props=sim_utils.CollisionPropertiesCfg(
-            contact_offset=0.0, rest_offset=0.0,
+            # Same latent constraint as ORU_CFG: PhysX rejects contactOffset <= 0.
+            # Harmless today (the ground is instanceable, so this override is
+            # dropped and the default ~0.02 applies), but it would error the moment
+            # the asset is converted non-instanceable.
+            contact_offset=0.02, rest_offset=0.0,
         ),
+        # required for the ORU<->Ground ContactSensor to report anything
+        activate_contact_sensors=True,
     ),
     init_state=RigidObjectCfg.InitialStateCfg(
+        # Back to the designed placement (0.05). Lowering it by 6 mm only moved
+        # world coordinates - a rigid translation of the ground does NOT change
+        # the ORU/pin relative engagement, so it could not buy any real insertion
+        # depth (it was equivalent to raising oru_seat_z). Reverted 2026-10-05.
         pos=(0.4, 0.0, 0.05),
         rot=(0.0, 1.0, 0.0, 0.0),
     ),
@@ -200,6 +223,19 @@ class OruSceneCfg(InteractiveSceneCfg):
     Gripper: RigidObjectCfg = GRIPPER_CFG.replace(prim_path="{ENV_REGEX_NS}/Gripper")
     ORU: RigidObjectCfg = ORU_CFG.replace(prim_path="{ENV_REGEX_NS}/ORU")
     Ground: RigidObjectCfg = GROUND_CFG.replace(prim_path="{ENV_REGEX_NS}/Ground")
+    # True ORU<->Ground contact force (PhysX contact reports filtered to that pair).
+    # Needed because the wrist reaction cannot serve as a contact signal here:
+    # free-space chain inertia reads 3.9-5.9 N (8-12x the 0.5 N threshold) and at
+    # the seat the same channel reads 2-10 N from the bounce, i.e. the two bands
+    # overlap - the old logic therefore "confirmed contact" 82 mm above the seat.
+    # This sensor reads ~0 while airborne and only the real pair force on contact.
+    Contact: ContactSensorCfg = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/ORU",
+        filter_prim_paths_expr=["{ENV_REGEX_NS}/Ground"],
+        history_length=0,
+        update_period=0.0,
+        debug_vis=False,
+    )
 
 
 # ==========================================================================
@@ -220,10 +256,12 @@ class OruEnvCfg(DirectRLEnvCfg):
     state_space: int = 0
 
     obs_order: list = [
+        "stage_state",
         "ee_pos_rel_ground", "ee_quat", "ee_linvel", "ee_angvel", "joint_pos",
         "task_prop_gains", "task_deriv_gains", "applied_wrench", "measured_force",
     ]
     state_order: list = [
+        "stage_state",
         "ee_pos_rel_ground", "ee_quat", "ee_linvel", "ee_angvel", "joint_pos",
         "ground_pos", "ground_quat",
         "task_prop_gains", "task_deriv_gains", "applied_wrench", "measured_force",
@@ -231,7 +269,14 @@ class OruEnvCfg(DirectRLEnvCfg):
     ]
 
     task: OruTaskCfg = OruTaskCfg()
-    episode_length_s: float = 15.0
+    # 60 s = 900 policy steps at 15 Hz (sim.dt 1/120 x decimation 8). test0 used
+    # 15 s / 225 steps and was truncated while the EE was still descending, at a
+    # measured ~1.2 cm/s (0.31 m start -> ~0.13 m by step 225). The bottleneck is
+    # therefore the descent RATE, not just the budget: nothing in code rate-limits
+    # the free-space approach (only the insertion anchor is clamped to
+    # reference_speed), so the speed is whatever Kp/Kd the policy picks. This
+    # budget is deliberately generous so the run can show where/if it stalls.
+    episode_length_s: float = 60.0
 
     ema_factor: float = 0.2
 
@@ -264,7 +309,7 @@ class OruEnvCfg(DirectRLEnvCfg):
     # visual hierarchy (FixedJoint prims) only exists on env_0, so RigidObjects
     # in other envs render at incorrect positions. Each env must be independent.
     scene: OruSceneCfg = OruSceneCfg(
-        num_envs=16, env_spacing=2.0, clone_in_fabric=False,
+        num_envs=64, env_spacing=2.0, clone_in_fabric=False,
     )
 
 
