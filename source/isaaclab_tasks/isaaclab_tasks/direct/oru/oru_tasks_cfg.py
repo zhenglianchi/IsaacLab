@@ -18,7 +18,7 @@ class OruTaskCfg:
 
     # ── Task identity ──────────────────────────────────────────────
     name: str = "oru_assembly"
-    duration_s: float = 60.0  # unused; kept in sync with OruEnvCfg.episode_length_s
+    duration_s: float = 90.0  # unused; kept in sync with OruEnvCfg.episode_length_s
 
     # ── Fixed target pose (world frame) ────────────────────────────
     # Position [0.4, 0, 0] + Quaternion [0, 0, 1, 0] (wxyz, 180° around Y)

@@ -72,8 +72,18 @@ params:
     kl_threshold: 0.008
     score_to_win: 20000
     max_epochs: 200
+    # Checkpoint policy: keep ONLY the highest-reward weights.
+    #   save_frequency: 0    -> disables the periodic "last_<name>_ep_..._rew_..." dumps
+    #                           (rl_games a2c_common.py: `if self.save_freq > 0`)
+    #   save_best_after: 10  -> every time the mean reward improves, <name>.pth is
+    #                           overwritten (independent code path, so it still works
+    #                           with save_frequency disabled)
+    # Net effect: one 215 MB file (`OruAssembly.pth`) that always holds the best
+    # policy so far, instead of ~9 of them. Note: at max_epochs rl_games hard-codes
+    # one extra final-round `last_*` save that no config can disable - delete it
+    # afterwards if disk matters (rm logs/rl_games/OruAssembly/<run>/nn/last_*.pth).
     save_best_after: 10
-    save_frequency: 25
+    save_frequency: 0
     print_stats: True
     grad_norm: 1.0
     entropy_coef: 0.0

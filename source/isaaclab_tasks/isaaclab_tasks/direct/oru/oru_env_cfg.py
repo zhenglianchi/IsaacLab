@@ -269,14 +269,15 @@ class OruEnvCfg(DirectRLEnvCfg):
     ]
 
     task: OruTaskCfg = OruTaskCfg()
-    # 60 s = 900 policy steps at 15 Hz (sim.dt 1/120 x decimation 8). test0 used
-    # 15 s / 225 steps and was truncated while the EE was still descending, at a
-    # measured ~1.2 cm/s (0.31 m start -> ~0.13 m by step 225). The bottleneck is
-    # therefore the descent RATE, not just the budget: nothing in code rate-limits
-    # the free-space approach (only the insertion anchor is clamped to
-    # reference_speed), so the speed is whatever Kp/Kd the policy picks. This
-    # budget is deliberately generous so the run can show where/if it stalls.
-    episode_length_s: float = 60.0
+    # 90 s = 1350 policy steps at 15 Hz (sim.dt 1/120 x decimation 8). test0 used
+    # 15 s / 225 steps and was truncated while the EE was still descending; the
+    # budget has since gone 15 -> 60 -> 90 s so that approach + the 2 cm/s insertion
+    # ramp + the settle/hold window all fit even for slow early-training rollouts.
+    # Note: rl_games collects a fixed horizon_length x num_envs per epoch, so a
+    # longer episode does NOT change wall-clock per epoch - it only means fewer
+    # resets (less start-pose variety per epoch) and more per-step reward
+    # accumulation before a reset.
+    episode_length_s: float = 90.0
 
     ema_factor: float = 0.2
 
