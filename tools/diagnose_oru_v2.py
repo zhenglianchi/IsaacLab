@@ -44,6 +44,15 @@ parser.add_argument('--hold-force', type=float, default=None,
                     help='override cfg.task.hold_force in N (default 3.0): the constant downward preload applied '
                          'once the ORU is geometrically seated and the feedback gains are frozen. Zeroing the '
                          'gains alone lets the ORU float up (nothing pulls the weightless chain down)')
+parser.add_argument('--contact-force-threshold', type=float, default=None,
+                    help='override cfg.task.contact_force_threshold in N (default 0.5) - for the switch '
+                         'threshold sweep required by the stage-switch verification protocol')
+parser.add_argument('--fault-inject', choices=['none', 'zero', 'bias', 'delay'], default='none',
+                    help='deliberately corrupt the contact signal to prove the switch actually matters: '
+                         'zero (always 0 N), bias (add a constant N to every component), delay (replay the '
+                         'value from --fault-delay steps ago)')
+parser.add_argument('--fault-bias', type=float, default=2.0, help='bias in N for --fault-inject bias')
+parser.add_argument('--fault-delay', type=int, default=5, help='steps for --fault-inject delay')
 parser.add_argument('--output', default='.installation/oru_v2_diagnostic')
 parser.add_argument('--head', action='store_true', help='open the Isaac Sim viewer instead of running headless')
 parser.add_argument('--real-time', action='store_true', help='pace steps at the 15 Hz policy rate for viewing')
@@ -82,6 +91,10 @@ try:
               f'(rest_offset = {cfg.scene.ORU.spawn.collision_props.rest_offset}, '
               f'contact_offset = {cfg.scene.ORU.spawn.collision_props.contact_offset})', flush=True)
     cfg.task.insertion_bias = args.bias
+    if args.contact_force_threshold is not None:
+        cfg.task.contact_force_threshold = args.contact_force_threshold
+        print(f'[INFO] contact_force_threshold = {args.contact_force_threshold} N '
+              f'(leave {cfg.task.contact_leave_threshold} N release)', flush=True)
     if args.max_force is not None:
         cfg.task.max_task_force = args.max_force
     if args.max_torque is not None:
@@ -105,6 +118,31 @@ try:
     obs, _ = env.reset()
     task = env.unwrapped
     assert obs['policy'].shape == (args.num_envs, 57)
+
+    # ── Fault injection on the contact signal ──────────────────────────
+    # Deliberately corrupting the detector is the only way to show that the stage
+    # switch has an effect at all (otherwise "it works with or without the switch"
+    # cannot be excluded). Patched on the vector provider, which the magnitude
+    # helper and the stage logic both go through.
+    if args.fault_inject != 'none':
+        _orig_contact_vec = task._get_contact_force_vec
+        _delay_buf = []
+
+        def _faulty_contact_vec():
+            v = _orig_contact_vec()
+            if args.fault_inject == 'zero':
+                return torch.zeros_like(v)
+            if args.fault_inject == 'bias':
+                return v + args.fault_bias
+            _delay_buf.append(v.clone())
+            while len(_delay_buf) <= args.fault_delay:
+                _delay_buf.insert(0, v.clone())
+            return _delay_buf.pop(0)
+
+        task._get_contact_force_vec = _faulty_contact_vec
+        print(f"[INFO] FAULT INJECTION on contact force: {args.fault_inject} "
+              f"(bias={args.fault_bias} N, delay={args.fault_delay} steps)", flush=True)
+
     # Resetting one environment must not advance time or move any other body.
     if args.num_envs > 1:
         before = [a.data.root_state_w[1:].clone() for a in (task.robot, task.oru)]
@@ -123,6 +161,7 @@ try:
     min_oru_z = float("inf")
     min_oru_step = -1
     max_streak = 0
+    obs_mismatch = 0
     seat = float(cfg.task.oru_seat_z)
     ee_seat = float(cfg.task.success_z)
     print(f"[INFO] targets: oru_seat_z={seat:.5f}  ee success_z={ee_seat:.5f}  "
@@ -136,7 +175,8 @@ try:
                          'kp_z','command_fz','wrist_fx_world','wrist_fy_world','wrist_fz_world','stable_success',
                          'oru_spd_m_s','oru_angspd_rad_s','cand','succ_count',
                          'oru_wx','oru_wy','oru_wz','oru_qw','oru_qx','oru_qy','oru_qz',
-                         'contact_force_N'])
+                         'contact_force_N','contact_flag','contact_fx','contact_fy','contact_fz',
+                         'rew_stage1','rew_stage2'])
         for step in range(args.steps):
             loop_start = time.time()
             obs, reward, terminated, truncated, info = env.step(torch.zeros(env.action_space.shape, device=task.device))
@@ -147,6 +187,21 @@ try:
             xy = torch.linalg.vector_norm(task.oru.data.root_pos_w[:, :2] - task.ground.data.root_pos_w[:, :2], dim=-1)
             _xy_dbg, gap_dbg, angle_dbg = task._oru_pose_errors()
             cand_now = task._get_curr_successes(task.cfg.task.success_threshold)
+            contact_vec = task._get_contact_force_vec()
+            contact_vec_mag = torch.linalg.vector_norm(contact_vec, dim=-1)
+            # obs <-> internal stage state consistency (guards against stale gating:
+            # _update_stage_state runs only once per policy step)
+            stage_obs = obs['policy'][0, :5].float()
+            stage_expect = torch.stack((
+                task._insertion_phase[0].float(), task._stage_alpha[0], task._contact_alpha[0],
+                task._control_z[0] - task.fixed_target_z, task._best_insertion_gap[0],
+            ))
+            if not torch.allclose(stage_obs, stage_expect, atol=1e-5):
+                obs_mismatch += 1
+                if obs_mismatch <= 3:
+                    print(f"[WARN] obs stage_state mismatch at step {step}: "
+                          f"obs={[round(v, 5) for v in stage_obs.tolist()]} "
+                          f"internal={[round(v, 5) for v in stage_expect.tolist()]}", flush=True)
             z_now = float(task.oru.data.root_pos_w[0, 2])
             if z_now < min_oru_z:
                 min_oru_z, min_oru_step = z_now, step
@@ -175,7 +230,9 @@ try:
                                 task.oru.data.root_ang_vel_w[:, 2],
                                 task.oru.data.root_quat_w[:, 0], task.oru.data.root_quat_w[:, 1],
                                 task.oru.data.root_quat_w[:, 2], task.oru.data.root_quat_w[:, 3],
-                                task._get_contact_force_mag()),
+                                contact_vec_mag, task._was_in_contact.float(),
+                                contact_vec[:, 0], contact_vec[:, 1], contact_vec[:, 2],
+                                task.stage1_reward, task.stage2_reward),
                            dim=1).cpu().tolist()
             # Autoreset rows are a new initial state; omit rather than mislabel terminal data.
             reset_ids = (terminated | truncated).cpu().tolist()
@@ -199,10 +256,13 @@ try:
     print(f"  EE  final               : {final_ee:.5f}  diff {(final_ee - ee_seat) * 1000:+6.2f} mm", flush=True)
     print(f"  stable_success          : {bool(success.any().item())}  "
           f"(longest cand streak {max_streak} steps, needs {hold})", flush=True)
+    print(f"  obs stage_state mismatch: {obs_mismatch} steps  (0 expected)", flush=True)
     print("===========================================", flush=True)
 
     summary = {'num_envs':args.num_envs, 'steps':args.steps, 'nominal':args.nominal, 'bias_m':args.bias,
                'penetration_m':args.penetration, 'oru_usd':args.oru_usd,
+               'contact_force_threshold_N':float(cfg.task.contact_force_threshold),
+               'fault_inject':args.fault_inject, 'obs_stage_mismatch_steps':obs_mismatch,
                'oru_seat_target_m':seat, 'oru_lowest_m':min_oru_z, 'oru_final_m':final_oru,
                'gap_to_target_mm':(min_oru_z - seat) * 1000, 'ee_final_m':final_ee,
                'max_cand_streak_steps':max_streak,

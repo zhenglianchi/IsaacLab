@@ -420,20 +420,26 @@ class OruEnv(DirectRLEnv):
         F_meas = self.robot.data.body_incoming_joint_wrench_b[:, self._ee_frame_idx, :3]
         return torch.norm(F_meas, dim=-1)
 
-    def _get_contact_force_mag(self) -> torch.Tensor:
-        """Filtered ORU<->Ground contact force magnitude from the ContactSensor.
+    def _get_contact_force_vec(self) -> torch.Tensor:
+        """Filtered ORU<->Ground contact force vector of the strongest reported pair.
 
-        This is the pair's real contact force, not the wrist reaction: it reads ~0
-        in free space (where the wrist channel carries 3.9-5.9 N of chain inertia)
-        and only rises when the ORU actually touches the docking surface.
+        Shape (N, 3), world frame. This is the pair's real contact force, not the
+        wrist reaction: it is ~0 in free space (where the wrist channel carries
+        3.9-5.9 N of chain inertia) and only rises when the ORU touches the docking
+        surface. The vector form lets diagnostics check the contact *direction*.
         """
         f = self.contact_sensor.data.force_matrix_w
         if f is None or f.numel() == 0:
             f = self.contact_sensor.data.net_forces_w
         if f is None:
-            return torch.zeros(self.num_envs, device=self.device)
-        # (N, bodies, filters, 3) -> (N,) as the strongest reported pair force
-        return torch.linalg.vector_norm(f, dim=-1).reshape(self.num_envs, -1).amax(dim=-1)
+            return torch.zeros((self.num_envs, 3), device=self.device)
+        flat = f.reshape(self.num_envs, -1, 3)
+        idx = torch.linalg.vector_norm(flat, dim=-1).argmax(dim=-1)
+        return flat[torch.arange(self.num_envs, device=self.device), idx]
+
+    def _get_contact_force_mag(self) -> torch.Tensor:
+        """Filtered ORU<->Ground contact force magnitude from the ContactSensor."""
+        return torch.linalg.vector_norm(self._get_contact_force_vec(), dim=-1)
 
     def _update_stage_state(self):
         """Once per policy step: guidance by geometry, contact by real force.
@@ -565,6 +571,12 @@ class OruEnv(DirectRLEnv):
         r_stage1 = self._get_path_reward(target_ref_pos, dist_target)
         r_stage2 = self._get_insertion_reward(target_ref_pos)
         contact_degree = self._get_contact_degree()  # [0,1] soft switch
+        # Exposed for diagnostics (tools/diagnose_oru_v2.py -> tools/check_stage_switch.py):
+        # the stage-2 term must be exactly zero until real contact, otherwise the
+        # insertion costs are taxed while the part is still airborne.
+        self.stage1_reward = r_stage1
+        self.stage2_reward = r_stage2
+        self.stage_blend = contact_degree
 
         method = self.cfg.task.experiment_method
         if method == "single":
