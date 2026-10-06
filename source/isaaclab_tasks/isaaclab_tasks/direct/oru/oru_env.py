@@ -194,6 +194,8 @@ class OruEnv(DirectRLEnv):
                       'wt_x_max,wt_x_min,wt_y_max,wt_y_min,wt_z_max,wt_z_min')
         if self._ct_src:
             _base_cols += ',ct_x_max,ct_x_min,ct_y_max,ct_y_min,ct_z_max,ct_z_min'
+        _mp = pathlib.Path(self._ep_metrics_path)
+        _mp.parent.mkdir(parents=True, exist_ok=True)
         if not _mp.exists():
             _mp.write_text(_base_cols + '\n', encoding='utf-8')
         print('[oru] episode metrics columns:', _base_cols.count(',') + 1, '| contact torque source:', self._ct_src)
