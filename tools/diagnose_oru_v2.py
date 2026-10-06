@@ -50,6 +50,11 @@ parser.add_argument('--hold-force', type=float, default=None,
 parser.add_argument('--depen-vel', type=float, default=None,
                     help='override max_depenetration_velocity (m/s) on the ORU and the chain bodies; '
                          'PhysX resolves over-penetration up to this speed, so it bounds the seat ejection')
+parser.add_argument('--rand-pos', type=float, default=None,
+                    help='override ik_rand_pos_noise per axis in m (e.g. 0.03 = +/-3 cm). '
+                         'The shipped config uses a +-1 cm pilot; the legacy design used +-12 cm.')
+parser.add_argument('--rand-rot', type=float, default=None,
+                    help='override ik_rand_rot_noise per axis in rad (e.g. 0.0524 = +/-3 deg)')
 parser.add_argument('--seed', type=int, default=1234,
                     help='env seed for the reset randomization; vary it to build an evaluation set '
                          '(all envs share one seed, so use --num-envs to get many conditions per run)')
@@ -79,6 +84,12 @@ try:
     from isaaclab.utils.math import quat_apply
     cfg = parse_env_cfg('Isaac-Oru-Direct-v0', device='cuda:0', num_envs=args.num_envs)
     cfg.seed = args.seed
+    if args.rand_pos is not None:
+        cfg.task.ik_rand_pos_noise = (args.rand_pos,) * 3
+        print(f'[INFO] ik_rand_pos_noise = +/-{args.rand_pos * 100:.1f} cm per axis', flush=True)
+    if args.rand_rot is not None:
+        cfg.task.ik_rand_rot_noise = (args.rand_rot,) * 3
+        print(f'[INFO] ik_rand_rot_noise = +/-{args.rand_rot:.4f} rad per axis', flush=True)
     cfg.task.experiment_method = 'fixed'
     if args.ground_drop:
         gx, gy, gz = cfg.scene.Ground.init_state.pos

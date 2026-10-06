@@ -84,7 +84,10 @@ class OruTaskCfg:
     success_hold_s: float = 0.3
     success_speed_tolerance: float = 0.01
     success_angular_speed_tolerance: float = 0.05  # rad/s
-    ik_iterations: int = 20
+    ik_iterations: int = 60  # 2026-10-06: 10 -> 60. The reset DLS IK did not
+                             # converge for large domain randomization (at +/-12 cm it
+                             # returned a 0.285 m / 0.656 rad residual and raised); the
+                             # offsets the task was designed around need more iterations.
     ik_position_tolerance: float = 0.002
     ik_angle_tolerance: float = 0.0175
 
@@ -96,8 +99,13 @@ class OruTaskCfg:
     #   4. Write those joints as the initial state
     # The target pose NEVER changes — policy learns to reach the same goal
     # from different starting configurations.
-    ik_rand_pos_noise: tuple = (0.01, 0.01, 0.01)  # pilot: ±1cm; enlarge after validation
-    ik_rand_rot_noise: tuple = (0.01745, 0.01745, 0.01745)  # pilot: ±1 degree per axis
+    # 2026-10-06: restored to the original (legacy) randomization. The v2 rework had
+    # temporarily reduced it to a +-1 cm / +-1 deg 'pilot' (with a note to enlarge after
+    # validation). At the pilot range the fixed-gain baseline (C0) succeeds 100% of
+    # episodes, i.e. the task is too easy to discriminate methods; the original range is
+    # the one the task was designed around.
+    ik_rand_pos_noise: tuple = (0.12, 0.12, 0.12)      # +/-12 cm per axis (original design)
+    ik_rand_rot_noise: tuple = (0.0524, 0.0524, 0.0524)  # +/-3 deg per axis (original design)
 
     # ── Fixed IK offset for single-case evaluation ──────────────────
     # When set (not None), overrides random noise. Used by play_force.py.
