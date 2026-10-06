@@ -19,17 +19,30 @@ def update_phase(
 
     This is a task sequencer, not a classifier of true peg/hole contact.
     """
+    # 2026-10-06 (user request): the guidance stage and the descent permission are no
+    # longer gated by the ATTITUDE, and the +-5 mm height window at the pre-insert point
+    # is gone. Reason: the gate checked the PART attitude while the controller only
+    # regulates the FLANGE, so a residual twist about the tool axis (0.1-0.38 rad, see
+    # the handover entry) made the gate unsatisfiable -> phase stayed 0 -> the reference
+    # held the part at the pre-insert height and the arm hovered, motionless, until the
+    # 90 s timeout (97.7% of C0 failures). Blocking the descent 80 mm above the seat was
+    # also against this task's own design rule that switching is contact-driven: the part
+    # is now allowed to descend and CONTACT decides what happens next.
+    # in_corridor = laterally above the docking axis; the attitude requirement is kept
+    # only for reporting (aligned) and for the success criterion, not as a precondition.
     aligned = (xy_error < cfg.entry_xy_tolerance) & (angle_error < cfg.entry_angle_tolerance)
-    at_entry = aligned & ((height_gap - cfg.preinsert_height).abs() < cfg.entry_height_tolerance)
-    entry_count = torch.where(at_entry, entry_count + 1, 0)
+    in_corridor = xy_error < cfg.entry_xy_tolerance
+    entry_count = torch.where(in_corridor, entry_count + 1, 0)
     phase = phase | (entry_count >= cfg.entry_confirm_steps)
     phase = phase & (height_gap <= cfg.preinsert_height + 2 * cfg.entry_height_tolerance)
-    can_advance = aligned & phase & (height_gap > -cfg.seat_z_tolerance)
+    can_advance = phase & (height_gap > -cfg.seat_z_tolerance)
     # Real ORU<->ground contact force (zero while airborne), debounced by
     # entry_confirm_steps and released only below contact_leave_threshold.
-    touching = aligned & (contact_force > cfg.contact_force_threshold)
+    # Contact is decided by force alone (plus the lateral corridor), NOT by attitude:
+    # otherwise an unachievable attitude gate also kills the contact stage.
+    touching = in_corridor & (contact_force > cfg.contact_force_threshold)
     contact_count = torch.where(touching, contact_count + 1, 0)
-    contact = (contact | (contact_count >= cfg.entry_confirm_steps)) & aligned & (
+    contact = (contact | (contact_count >= cfg.entry_confirm_steps)) & in_corridor & (
         contact_force >= cfg.contact_leave_threshold
     )
     delta = min(1.0, dt / cfg.switch_duration_s)

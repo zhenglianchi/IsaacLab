@@ -271,7 +271,7 @@ try:
             if step % 50 == 0 or step == args.steps - 1:
                 print(f"[step {step:4d}] ee_z={float(task.ee_pos[0, 2]):.5f}  oru_z={z_now:.5f}  "
                       f"target: ee={float(ee_gap[0].item()) * 1000:+6.2f} / oru={float(gap_dbg[0].item()) * 1000:+6.2f} mm  "
-                      f"tilt(ee)={float(ee_angle[0].item()):.4f} rad  xy(ee)={float(ee_xy[0].item()) * 1000:.2f} mm  "
+                      f"tilt(oru)={float(task._oru_pose_errors()[2][0].item()):.4f} rad  xy(ee)={float(ee_xy[0].item()) * 1000:.2f} mm  "
                       f"cand={int(cand_now[0].item())}  streak={int(task._success_count[0].item())}"
                       f"  phase={int(task._insertion_phase[0].item())}  contact={float(task._contact_alpha[0].item()):.2f}"
                       f"  Fcontact={float(task._get_contact_force_mag()[0].item()):.3f} N",
