@@ -29,7 +29,15 @@ class OruTaskCfg:
     # measured on the ORU body instead (oru_seat_z below) - the ORU is the part
     # that enters the slot.
     target_pos: tuple = (0.4, 0.0, 0.4298)
-    target_quat: tuple = (0.0, 0.0, 1.0, 0.0)
+    # 2026-10-06: calibrated. The tool chain is a set of PhysX FixedJoints, and such
+    # joints yield under dynamic load (chain whip) and then have no restoring drive, so
+    # the approach transient leaves a permanent twist about the tool axis. The controller
+    # only regulates the flange, so it stayed satisfied while the PART was twisted ~0.38
+    # rad, the alignment gate never opened and the arm hovered (97.7% of C0 failures).
+    # Measured at a no-load stall (EE exactly at its old target) the real mounting is
+    # M = conj(T) (x) q_oru, so the target that puts the PART at oru_seat_quat is
+    # T* = oru_seat_quat (x) conj(q_oru) (x) T:
+    target_quat: tuple = (-0.00002, 0.05607, 0.99843, 0.00003)
     # EE approach/control height (world). NOT the success reference.
     success_z: float = 0.4298
 
@@ -254,6 +262,12 @@ class OruTaskCfg:
     # Optional stiff joint drive (spring-damper on the locked DOFs) to
     # resist FixedJoint yield under dynamic loads (chain whip).
     # None = no drive (default PhysX behavior).
+    # 2026-10-06: measured INEFFECTIVE and reverted. These went to 1e6/1e4 while chasing
+    # the chain twist, with bit-identical results (env 0 twist 0.3802 rad before and
+    # after): physxJoint:drive:* needs a drivable DOF, and a UsdPhysics.FixedJoint has
+    # none, so the attribute is ignored. The chain therefore stays compliant and the
+    # approach transient leaves a permanent twist about the tool axis - see the note on
+    # target_quat below and the handover entry for the pending structural fix.
     joint_drive_stiffness: float | None = None
     joint_drive_damping: float | None = None
 
