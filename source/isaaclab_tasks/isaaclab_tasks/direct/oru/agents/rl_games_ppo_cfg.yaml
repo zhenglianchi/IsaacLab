@@ -84,7 +84,7 @@ params:
     # tens of thousands: the run stopped at epoch 11/100 having reached 31837.
     # Removing the key disables the check entirely (the branch is guarded by
     # `if 'score_to_win' in self.config`), so training always runs max_epochs.
-    max_epochs: 100
+    max_epochs: 60
     # Checkpoint policy: keep ONLY the highest-reward weights.
     #   save_frequency: 0    -> disables the periodic "last_<name>_ep_..._rew_..." dumps
     #                           (rl_games a2c_common.py: `if self.save_freq > 0`)
