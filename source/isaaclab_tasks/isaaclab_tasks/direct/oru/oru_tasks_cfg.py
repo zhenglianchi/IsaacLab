@@ -216,7 +216,13 @@ class OruTaskCfg:
     # ── Two-stage reward: stage 2 precision + force compliance ─────
     # Reward units per meter of NEW best insertion depth (1mm -> +0.5).
     z_progress_weight: float = 500.0
-    insertion_time_penalty: float = 2.5  # per control step before stable success
+    insertion_time_penalty: float = 0.05   # 2026-10-06: was 2.5. At 2.5 per control step,
+                                       # ~100 steps of attempting the insertion cost -250 while
+                                       # the progress reward pays only 0.5 per mm (~+4 for 8 mm),
+                                       # so entering stage 2 was strongly net-negative and the
+                                       # optimal policy was to never touch (logs: contact_degree
+                                       # 0.281 -> 0.000, return 765 -> 476). At 0.05 the deadline
+                                       # pressure stays without dominating the completion bonus.  # per control step before stable success
     insertion_xy_weight: float = 0.5    # cost at one XY tolerance
     insertion_angle_weight: float = 0.5 # cost at one angle tolerance
     force_smooth_weight: float = 0.005         # ΔF penalty
