@@ -58,3 +58,19 @@
 2. 评估 **v15 epoch-60** 检查点（`nn/last_OruAssembly_ep_60_rew__1599.6842_.pth`）；
 3. 出 **三行对比**（C0 / v14 / v15-ep60），其中**接触力与腕部力两套口径并列**；
 4. 按判据定稿主结果 → 填表 3-9 + 更新 3.6.7 + 推送。
+
+---
+
+# 追加 2（用户指示：分量式记录，不看合力）
+
+- 逐回合指标 CSV **不再只记合力模**，而是**把每个方向的力/力矩分量分开记录**：
+  - `cf_{x,y,z}_{max,min}`：**接触传感器**力的三分量（世界系，带符号极值）
+  - `wf_{x,y,z}_{max,min}`：**腕部**力三分量（世界系）
+  - `wt_{x,y,z}_{max,min}`：**腕部**力矩三分量（世界系）
+  - `ct_{x,y,z}_{max,min}`：**接触传感器力矩**三分量 —— **仅当该 IsaacLab/PhysX 版本提供时**才有这几列
+    （启动时会打印 `[oru] episode metrics columns: N | contact torque source: ...`；
+     现有代码路径只用 `net_forces_w`/`force_matrix_w`，即**多数版本只提供力**，此时无 `ct_*` 列）
+- 原有的合力模列保留（`force_peak_N`、`wrist_f_peak_N`、`wrist_fxy_peak_N`、`wrist_fz_peak_N`、
+  `wrist_tau_peak_Nm`、`wrist_tauz_peak_Nm`），便于出总表；分量列用于看方向与符号。
+- **注意**：表头变了，旧的 `logs/oru_episode_metrics*.csv` 已删除 ✓，明天评估前必须重跑 C0 生成新表头。
+- 评估时两套口径都要报：**接触传感器**（1/120 s 子步，真实接触载荷）与**腕部六维**（15 Hz，含链条惯性；真机可比性以此为准）。
