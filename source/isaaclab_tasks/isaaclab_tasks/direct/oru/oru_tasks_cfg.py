@@ -125,6 +125,17 @@ class OruTaskCfg:
     # (ik_rand_pos_noise is the fallback symmetric box used when bounds are None.)
     ik_rand_pos_noise: tuple = (0.12, 0.12, 0.0)
     ik_rand_pos_bounds: tuple | None = ((-0.12, 0.0), (-0.12, 0.12), (0.0, 0.0))
+    # Constant vertical bias added to the reset start pose (0.0 = the home height).
+    # Used for the start-height sensitivity study; it shifts every episode equally and
+    # does NOT replace the lateral randomization, which stays active on top of it.
+    start_z_offset: float = 0.0
+    # Reference for the Z channel:
+    #   'ramp'     = rate-limited virtual anchor (pre-insert point, then 2 cm/s down).
+    #   'setpoint' = the reference IS the seat pose from the start: a classic
+    #                fixed-setpoint impedance controller, no staging, no rate limit.
+    # 'setpoint' is the intended C0 baseline: giving the target point in one step is
+    # what excites the outward arc / the tool-axis clocking drift.
+    reference_mode: str = "ramp"
     ik_rand_rot_noise: tuple = (0.0524, 0.0524, 0.0524)  # +/-3 deg per axis (original design)
 
     # ── Fixed IK offset for single-case evaluation ──────────────────

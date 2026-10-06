@@ -705,7 +705,14 @@ class OruEnv(DirectRLEnv):
         #   2. the return no longer scales with the time left in the episode;
         #   3. a timeout now means failure, so the episode budget is spent on attempts
         #      that still have a chance instead of on holding a finished assembly.
-        terminated = self._stable_success.clone()
+        # 2026-10-06 (user request): do NOT terminate on success. Episodes are
+        # synchronized: every env runs the full 90 s horizon and they all reset on the
+        # same step. Per-env termination made 'episodes finished' differ from the env
+        # count and mixed episodes of different ages in one batch (evaluation counted
+        # 104 'episodes' for 100 envs, and the reward meter sampled unevenly). Success
+        # is still latched per episode in ep_succeeded / ep_success_times, and the env
+        # publishes its rate on the synchronized reset step.
+        terminated = torch.zeros_like(self._stable_success)
         return terminated, time_out
 
     # ==================================================================
@@ -772,6 +779,12 @@ class OruEnv(DirectRLEnv):
             else:
                 pos_noise = (2 * torch.rand(n, 3, device=self.device) - 1) * torch.tensor(task.ik_rand_pos_noise, device=self.device)
             rot_noise = (2 * torch.rand(n, 3, device=self.device) - 1) * torch.tensor(task.ik_rand_rot_noise, device=self.device)
+        # Optional constant vertical bias of the start height (see the task config).
+        # Applied AFTER sampling so the x/y randomization stays intact.
+        _zoff = getattr(task, "start_z_offset", 0.0)
+        if _zoff != 0.0:
+            pos_noise = pos_noise.clone()
+            pos_noise[:, 2] = pos_noise[:, 2] + _zoff
         target_pos = home[:, :3] + pos_noise
         dq = torch_utils.quat_from_euler_xyz(rot_noise[:, 0], rot_noise[:, 1], rot_noise[:, 2])
         target_quat = torch_utils.quat_mul(dq, home[:, 3:])

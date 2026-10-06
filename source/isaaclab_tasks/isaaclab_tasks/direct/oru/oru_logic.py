@@ -57,6 +57,14 @@ def update_phase(
 
 def axial_reference(current, ee_z, phase, can_advance, contact_alpha, *, seat_z, cfg, dt):
     """Rate-limit a virtual spring anchor; the physical seat stays unchanged."""
+    # 2026-10-06: single-target-point mode. The reference is the seat pose itself, so the
+    # controller receives one target point instead of a trajectory - the classic
+    # fixed-impedance baseline, which is what excites the outward arc and the
+    # tool-axis clocking drift that the staged version avoids.
+    if getattr(cfg, "reference_mode", "ramp") == "setpoint":
+        # NB: contact_alpha is a tensor, so build the result by broadcasting against
+        # current instead of torch.full_like (which needs a scalar fill value).
+        return (seat_z - cfg.insertion_bias * contact_alpha) + torch.zeros_like(current)
     desired = torch.where(phase, seat_z - cfg.insertion_bias * contact_alpha, seat_z + cfg.preinsert_height)
     # On loss of alignment do not move the spring anchor farther down. Release
     # existing preload gradually; no abrupt target jump or forced tilt.

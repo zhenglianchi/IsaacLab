@@ -19,6 +19,13 @@ parser.add_argument('--max-force', type=float, default=None,
                     help='override cfg.task.max_task_force (free-space XY/Z cap, default 8 N); lower = gentler approach')
 parser.add_argument('--max-force-z', type=float, default=None,
                     help='override cfg.task.max_task_force_z (default 60 N) to push harder than the cap')
+parser.add_argument('--start-z-offset', type=float, default=None,
+                    help='constant vertical bias of the reset start height in m '
+                         '(e.g. -0.15 lowers every episode start by 15 cm; the x/y '
+                         'randomization stays active)')
+parser.add_argument('--reference-mode', choices=['ramp', 'setpoint'], default=None,
+                    help="'ramp' = rate-limited anchor (default); 'setpoint' = single target point "
+                         "(classic fixed-impedance baseline, excites the outward arc)")
 parser.add_argument('--reference-speed', type=float, default=None,
                     help='override cfg.task.reference_speed in m/s (default 0.02); the anchor ramps at this rate')
 parser.add_argument('--friction', type=float, default=None,
@@ -133,6 +140,12 @@ try:
         cfg.task.hold_force = args.hold_force
     if args.max_force_z is not None:
         cfg.task.max_task_force_z = args.max_force_z
+    if args.start_z_offset is not None:
+        cfg.task.start_z_offset = args.start_z_offset
+        print(f'[INFO] start_z_offset = {cfg.task.start_z_offset * 100:+.1f} cm', flush=True)
+    if args.reference_mode is not None:
+        cfg.task.reference_mode = args.reference_mode
+        print(f'[INFO] reference_mode = {cfg.task.reference_mode}', flush=True)
     if args.reference_speed is not None:
         cfg.task.reference_speed = args.reference_speed
     if args.friction is not None:
@@ -205,6 +218,10 @@ try:
     success_rate_samples = []
     last_reset_step = torch.zeros(args.num_envs, dtype=torch.long, device=task.device)
     ep_lengths = []  # steps between consecutive resets of the same env
+    # Completion time of the CURRENT episode per env, sampled every step because
+    # _reset_buffers clears ep_success_times during the reset step.
+    last_success_step = torch.zeros(args.num_envs, dtype=torch.long, device=task.device)
+    finished_success_steps = []
     seat = float(cfg.task.oru_seat_z)
     ee_seat = float(cfg.task.success_z)
     print(f"[INFO] targets: oru_seat_z={seat:.5f}  ee success_z={ee_seat:.5f}  "
@@ -254,8 +271,17 @@ try:
                 min_oru_z, min_oru_step = z_now, step
             max_streak = max(max_streak, int(task._success_count[0].item()))
             streak_peak = torch.maximum(streak_peak, task._success_count.float())
+            _st = getattr(task, "ep_success_times", None)
+            if _st is not None:
+                _hit = _st > 0
+                last_success_step = torch.where(_hit, _st.long(), last_success_step)
             reset_now = task.episode_length_buf <= 0
             if torch.any(reset_now):
+                _re = torch.nonzero(reset_now, as_tuple=False).flatten()
+                for _e in _re.tolist():
+                    if int(last_success_step[_e].item()) > 0:
+                        finished_success_steps.append(int(last_success_step[_e].item()))
+                    last_success_step[_e] = 0
                 for _e in torch.nonzero(reset_now, as_tuple=False).flatten().tolist():
                     _iv = int(step) - int(last_reset_step[_e].item())
                     if _iv > 20:
@@ -330,6 +356,11 @@ try:
     print(f"  SUCCESS RATE             : {100.0 * ep_rate:.1f}%   "
           f"episode length mean/median/P95 = {mean_ep_len:.0f}/{med_ep_len:.0f}/{p95_ep_len:.0f} steps "
           f"({mean_ep_len / 15.0:.1f}/{med_ep_len / 15.0:.1f}/{p95_ep_len / 15.0:.1f} s)", flush=True)
+    if finished_success_steps:
+        _fs = sorted(finished_success_steps)
+        print(f"  success step  median/P95 = {_fs[len(_fs)//2]} / {_fs[int(0.95*(len(_fs)-1))]} steps "
+              f"({_fs[len(_fs)//2]/15.0:.1f} / {_fs[int(0.95*(len(_fs)-1))]/15.0:.1f} s)  over {len(_fs)} envs",
+              flush=True)
     print(f"  [obsolete] peak streak   : {int(streak_peak.max().item())} steps "
           f"(always one less than required: the reset clears it)", flush=True)
     print("===========================================", flush=True)
