@@ -153,6 +153,11 @@ class OruEnv(DirectRLEnv):
         # by _get_rewards for the one-time completion bonus (the episode terminates on
         # that same step, so this is the terminal reward).
         self._first_success = torch.zeros(N, dtype=torch.bool, device=self.device)
+        # ORU motion from finite differences of its pose (see _update_stage_state).
+        self._oru_speed = torch.zeros(N, device=self.device)
+        self._oru_angspd = torch.zeros(N, device=self.device)
+        self._oru_prev_pos = None
+        self._oru_prev_quat = None
         # Geometry-only seat latch (no velocity gate). Drives the controller freeze:
         # freezing on the full seat test is circular, because the bounce that the
         # control force causes is exactly what keeps the velocity gates unsatisfied.
@@ -456,6 +461,20 @@ class OruEnv(DirectRLEnv):
             return
         self._last_logic_step = self.common_step_counter
         task = self.cfg.task
+        # ORU motion by finite difference of its own pose across POLICY steps.
+        # Do NOT use oru.data.root_lin_vel_w / root_ang_vel_w here: the fixed-joint chain is
+        # merged into the UR5 articulation, so the ORU's standalone RigidObject velocity view
+        # is not a valid measurement. Measured in a fully settled seat: the quaternion changes
+        # by 1.2e-6 per step (tilt range 1.2e-4 rad over 200 steps) while root_ang_vel_w reads
+        # a constant 0.12 rad/s, i.e. ~2000x too large - that stale channel made the success
+        # angular-speed gate (0.05 rad/s) unsatisfiable and buried a perfectly seated part.
+        _pos, _quat = self.oru.data.root_pos_w, self.oru.data.root_quat_w
+        if self._oru_prev_pos is not None:
+            self._oru_speed = torch.linalg.vector_norm(_pos - self._oru_prev_pos, dim=-1) / self.step_dt
+            _dot = (_quat * self._oru_prev_quat).sum(-1).abs().clamp(0, 1)
+            self._oru_angspd = 2 * torch.acos(_dot) / self.step_dt
+        self._oru_prev_pos = _pos.clone()
+        self._oru_prev_quat = _quat.clone()
         # Task geometry is read from the ORU body (see _oru_pose_errors); the EE link
         # is rigid to 0.02 mm vertically / 0.2-0.7 mm laterally, but the ORU is the
         # part that actually enters the slot, so it stays the criterion.
@@ -660,9 +679,10 @@ class OruEnv(DirectRLEnv):
     def _get_curr_successes(self, threshold: float) -> torch.Tensor:
         """Actual ORU seat pose (_oru_pose_errors), bounded depth, orientation, low velocity."""
         xy, gap, angle = self._oru_pose_errors()
-        speed = torch.linalg.vector_norm(self.oru.data.root_lin_vel_w, dim=-1)
-        angular_speed = torch.linalg.vector_norm(self.oru.data.root_ang_vel_w, dim=-1)
-        return oru_logic.seat_candidate(xy, gap, angle, speed, angular_speed, cfg=self.cfg.task)
+        # Speeds measured from the pose we are actually judging (see _update_stage_state).
+        return oru_logic.seat_candidate(
+            xy, gap, angle, self._oru_speed, self._oru_angspd, cfg=self.cfg.task
+        )
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         self._compute_intermediate_values(self.physics_dt)
@@ -707,6 +727,8 @@ class OruEnv(DirectRLEnv):
         self._contact_count[env_ids] = 0
         self._success_count[env_ids] = 0
         self._first_success[env_ids] = False
+        self._oru_speed[env_ids] = 0.0
+        self._oru_angspd[env_ids] = 0.0
         self._seat_geom_count[env_ids] = 0
         self._seat_latched[env_ids] = False
         self._stable_success[env_ids] = False

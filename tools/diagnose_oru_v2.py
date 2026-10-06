@@ -11,7 +11,10 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--num-envs', type=int, default=64)
 parser.add_argument('--steps', type=int, default=225)
 parser.add_argument('--nominal', action='store_true')
-parser.add_argument('--bias', type=float, default=0.01)
+parser.add_argument('--bias', type=float, default=None,
+                    help='override cfg.task.insertion_bias in m (virtual equilibrium below the seat, '
+                         'contact-gated). Default None keeps the task config value.')
+parser.add_argument('--insertion-bias-legacy-default', type=float, default=0.01, help=argparse.SUPPRESS)
 parser.add_argument('--max-force', type=float, default=None,
                     help='override cfg.task.max_task_force (free-space XY/Z cap, default 8 N); lower = gentler approach')
 parser.add_argument('--max-force-z', type=float, default=None,
@@ -41,9 +44,12 @@ parser.add_argument('--penetration', type=float, default=0.0,
                          'This is a real contact allowance, not a frame translation. Caveat: it applies in every '
                          'direction, so once it exceeds the pin radius (2.5 mm) the pin/hole lateral contact is gone')
 parser.add_argument('--hold-force', type=float, default=None,
-                    help='override cfg.task.hold_force in N (default 3.0): the constant downward preload applied '
+                    help='override cfg.task.hold_force in N: the constant downward preload applied '
                          'once the ORU is geometrically seated and the feedback gains are frozen. Zeroing the '
                          'gains alone lets the ORU float up (nothing pulls the weightless chain down)')
+parser.add_argument('--depen-vel', type=float, default=None,
+                    help='override max_depenetration_velocity (m/s) on the ORU and the chain bodies; '
+                         'PhysX resolves over-penetration up to this speed, so it bounds the seat ejection')
 parser.add_argument('--seed', type=int, default=1234,
                     help='env seed for the reset randomization; vary it to build an evaluation set '
                          '(all envs share one seed, so use --num-envs to get many conditions per run)')
@@ -93,7 +99,16 @@ try:
         print(f'[INFO] ORU penetration allowance = {abs(args.penetration) * 1000:.1f} mm '
               f'(rest_offset = {cfg.scene.ORU.spawn.collision_props.rest_offset}, '
               f'contact_offset = {cfg.scene.ORU.spawn.collision_props.contact_offset})', flush=True)
-    cfg.task.insertion_bias = args.bias
+    if args.depen_vel is not None:
+        cfg.scene.ORU.spawn.rigid_props.max_depenetration_velocity = args.depen_vel
+        for name in ('Bridge', 'SixForce', 'Gripper'):
+            asset = getattr(cfg.scene, name, None)
+            if asset is not None and getattr(asset.spawn, 'rigid_props', None) is not None:
+                asset.spawn.rigid_props.max_depenetration_velocity = args.depen_vel
+        print(f'[INFO] max_depenetration_velocity = {args.depen_vel} m/s (ORU + chain)', flush=True)
+    if args.bias is not None:
+        cfg.task.insertion_bias = args.bias
+        print(f'[INFO] insertion_bias = {cfg.task.insertion_bias} m', flush=True)
     if args.contact_force_threshold is not None:
         cfg.task.contact_force_threshold = args.contact_force_threshold
         print(f'[INFO] contact_force_threshold = {args.contact_force_threshold} N '
@@ -168,6 +183,14 @@ try:
     # Per-env peak of the consecutive seat-criterion streak: >= 5 steps means stable
     # success under the env's own rule, so this gives a success rate across envs.
     streak_peak = torch.zeros(args.num_envs, device=task.device)
+    # CORRECT success accounting. The env terminates AND resets on the very step the seat
+    # criterion has held for success_hold_s, and _reset_buffers clears _success_count, so
+    # reading the counter after env.step() always shows one step less than required (a
+    # successful episode looks like 'streak 4 / stable_success False'). Instead, read the
+    # pre-reset success fraction the env publishes in extras['log'] on that step.
+    n_reset_events = 0
+    n_success_events = 0.0
+    success_rate_samples = []
     seat = float(cfg.task.oru_seat_z)
     ee_seat = float(cfg.task.success_z)
     print(f"[INFO] targets: oru_seat_z={seat:.5f}  ee success_z={ee_seat:.5f}  "
@@ -217,6 +240,14 @@ try:
                 min_oru_z, min_oru_step = z_now, step
             max_streak = max(max_streak, int(task._success_count[0].item()))
             streak_peak = torch.maximum(streak_peak, task._success_count.float())
+            reset_now = task.episode_length_buf <= 0
+            if torch.any(reset_now):
+                n_reset = int(reset_now.sum().item())
+                n_reset_events += n_reset
+                rate = float(task.extras.get('log', {}).get('episode_success_rate', float('nan')))
+                if rate == rate:  # not NaN: the env logged this reset batch
+                    n_success_events += rate * n_reset
+                    success_rate_samples.append(rate)
             # live readout: watch the seated height while the viewer runs
             if step % 50 == 0 or step == args.steps - 1:
                 print(f"[step {step:4d}] ee_z={float(task.ee_pos[0, 2]):.5f}  oru_z={z_now:.5f}  "
@@ -234,8 +265,8 @@ try:
                                 task._insertion_phase.float(), task._stage_alpha, task._contact_alpha, task._control_z,
                                 task.task_prop_gains[:, 2], task.applied_wrench[:, 2], force[:, 0], force[:, 1], force[:, 2],
                                 task._stable_success.float(),
-                                torch.linalg.vector_norm(task.oru.data.root_lin_vel_w, dim=-1),
-                                torch.linalg.vector_norm(task.oru.data.root_ang_vel_w, dim=-1),
+                                task._oru_speed,  # finite-difference (the channel the criterion uses)
+                                task._oru_angspd,  # finite-difference (the channel the criterion uses)
                                 cand_now.float(),
                                 task._success_count.float(),
                                 task.oru.data.root_ang_vel_w[:, 0], task.oru.data.root_ang_vel_w[:, 1],
@@ -270,17 +301,24 @@ try:
           f"(longest cand streak {max_streak} steps, needs {hold})", flush=True)
     print(f"  obs stage_state mismatch: {obs_mismatch} steps  (0 expected)", flush=True)
     n_success = int((streak_peak >= 5).sum().item())
-    med = float(streak_peak[streak_peak >= 5].median().item()) if n_success else float("nan")
-    print(f"  success across envs      : {n_success}/{args.num_envs} "
-          f"({100.0 * n_success / max(args.num_envs, 1):.1f}%)   median peak streak among successes = {med:.1f} steps",
-          flush=True)
+    ep_rate = (n_success_events / n_reset_events) if n_reset_events else float("nan")
+    mean_ep_len = (args.steps * args.num_envs / n_reset_events) if n_reset_events else float("nan")
+    print("  --- TRUE success accounting (episodes that ran to a decision) ---", flush=True)
+    print(f"  episodes finished        : {n_reset_events}  (success {n_success_events:.0f})", flush=True)
+    print(f"  SUCCESS RATE             : {100.0 * ep_rate:.1f}%   "
+          f"mean episode length = {mean_ep_len:.0f} steps ({mean_ep_len / 15.0:.1f} s)", flush=True)
+    print(f"  [obsolete] peak streak   : {int(streak_peak.max().item())} steps "
+          f"(always one less than required: the reset clears it)", flush=True)
     print("===========================================", flush=True)
 
-    summary = {'num_envs':args.num_envs, 'steps':args.steps, 'nominal':args.nominal, 'bias_m':args.bias,
+    summary = {'num_envs':args.num_envs, 'steps':args.steps, 'nominal':args.nominal, 'bias_m':float(cfg.task.insertion_bias),
                'penetration_m':args.penetration, 'oru_usd':args.oru_usd,
                'contact_force_threshold_N':float(cfg.task.contact_force_threshold),
                'fault_inject':args.fault_inject, 'obs_stage_mismatch_steps':obs_mismatch,
-               'seed':args.seed, 'success_envs':n_success,
+               'seed':args.seed, 'episodes_finished':n_reset_events,
+               'episodes_succeeded':n_success_events,
+               'success_rate_true':ep_rate, 'mean_episode_steps':mean_ep_len,
+               'success_envs_obsolete_streak_metric':n_success,
                'success_rate':n_success / max(args.num_envs, 1),
                'streak_peak_per_env':[float(x) for x in streak_peak.cpu().tolist()],
                'oru_seat_target_m':seat, 'oru_lowest_m':min_oru_z, 'oru_final_m':final_oru,

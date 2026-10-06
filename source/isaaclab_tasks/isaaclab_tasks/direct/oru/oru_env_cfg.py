@@ -150,6 +150,11 @@ ORU_CFG = RigidObjectCfg(
         usd_path="assets/USD/oru/ORU.usd",
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=True,
+            # Must be set EXPLICITLY. Leaving it unset means PhysX's default (effectively
+            # unlimited) resolution speed for this body, and ablation showed the difference:
+            # with it unset the seated ORU is launched out of the seat (gap -0.48 mm ->
+            # +127 mm in 2 steps), with =5.0 the seat holds. 5.0 matches the chain bodies.
+            max_depenetration_velocity=5.0,
         ),
         collision_props=sim_utils.CollisionPropertiesCfg(
             # PhysX requires contactOffset > 0 and > restOffset.

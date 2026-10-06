@@ -179,6 +179,10 @@ python tools/run_oru_experiment.py --method all --seeds 0 1 2 --epochs 100 --num
 ### 训练脚本相关的固定约定
 
 - 64 环境；**100 epoch**（2026-10-05 由 200 下调）；horizon128；minibatch512；mini_epochs4；每次训练用唯一目录名。
+- **判据速度必须用位姿有限差分**（2026-10-06 修）：`oru.data.root_lin_vel_w/root_ang_vel_w` 对被固定关节并入 UR5 关节链的 ORU 是**无效读数**——稳态 200 步姿态只变 1.2e-4 rad，该通道却恒定读 0.12 rad/s（每步应转 0.008 rad，差 3 个数量级）。现已改为按策略步对 ORU 位姿做差分（`_oru_speed/_oru_angspd`，复位清零），诊断 CSV 也记录同一通道。
+- **成功统计口径的坑**（2026-10-06）：环境在判据连续满足 `success_hold_s` 的那一步**立即终止并复位**，而 `_reset_buffers` 会把 `_success_count` 清零，因此在 `env.step()` 之后读计数**永远比要求少 1 步**（成功会被误读成「streak 4 / stable_success False」，复位造成的位姿跳变会被误读成「被弹出/双稳」）。正确做法是复位那一步读 `extras['log']['episode_success_rate']`（它在复位前计算）。诊断脚本已按此修正。
+- **C0（固定参数、零动作）基线实测**（64 环境、±1cm/±1° 随机化、600 步）：**176/176 回合成功 = 100%**，平均回合 218 步（**14.5 s**），末端反力峰值 28.8 N。即：**标称工况下不训练就能稳定装配**，成功率指标没有余量；方法的贡献只能落在**接触力峰值、完成时间、以及更苛刻工况（更大初始偏差/更快接近）下的鲁棒性**上。
+- **为此调整的参数**（动机部分被上面的口径错误污染，但取值本身合理，可随时回退）：`insertion_bias 0.01 -> 0.0`、`hold_force 3 -> 8 N`、ORU 显式 `max_depenetration_velocity=5.0`、`entry_angle_tolerance 0.035 -> 0.09`（自由空间姿态跟踪误差实测 2~4°，接触后自扶正到 <1.5°；原 2° 门会让一部分随机化条件无法进入缓降）。
 - **奖励：整体缩放写在环境里（`OruTaskCfg.reward_scale`，当前 1.0，在 `_get_rewards` 末尾相乘），不要写在 rl_games 的 `reward_shaper`**。原因：rl_games 记录的回合回报取自未缩放的奖励流（`a2c_common.py:782` 的 `current_rewards += rewards` 与 `:789` 的 `game_rewards.update(...)`；shaper 只作用于 `current_shaped_rewards`），只用 shaper 缩放会出现「训练信号小了、打印值仍是原始值」的假象。
 - **回合在成功时终止 + 一次性完成奖励**（2026-10-05 起）：`_get_dones` 里 `terminated = _stable_success`，完成奖励改为 `success_bonus=1000` 一次性发放（原按步发放的 `success_reward=40` 退役为 0，仅保留字段以便旧配置加载）。三点收益：① 完成事件异步到达，回报与 `episode_success_rate` 不再每 ~10 个 epoch 才更新一次（回合曾是 1350 步而每 epoch 只推进 128 步，100 epoch 仅约 9 个数据点）；② 回报与回合剩余长度解耦；③ 超时即失败，预算用于仍有机会的尝试。**完成奖励的量级不能随便调小**：停在接触前且保持对齐的每步收益（对齐奖励约 2/步）在 γ=0.995 下的现值约 `2/(1−0.995)=400`，完成奖励须与之同量级或更高，否则策略会停在接触前（test0 的 `rew_contact_degree≈0` 即此现象）。
 - **配置里不得出现 `score_to_win`**：rl_games 把它当提前退出阈值（`a2c_common.py:1123-1132`：超过即打印

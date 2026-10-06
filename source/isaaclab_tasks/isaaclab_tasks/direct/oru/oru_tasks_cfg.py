@@ -37,12 +37,26 @@ class OruTaskCfg:
     experiment_method: str = "full"  # full/single/no_path/no_stage/hard_switch/fixed
     preinsert_height: float = 0.08  # above the physical seat, NOT a new success height
     entry_xy_tolerance: float = 0.003
-    entry_angle_tolerance: float = 0.035  # radians, approximately 2 degrees
+    # Entry gate for the controlled descent. Measured over 64 randomized envs: while the
+    # part hangs free at the pre-insert height the attitude tracking error is 0.035-0.073
+    # rad (2.0-4.2 deg), so a 0.035 gate stalled 46/64 envs at the pre-insert point forever
+    # (the anchor never ramps down). Once the pin enters, the contact straightens the part
+    # to <=0.026 rad, so the SUCCESS gate (seat_angle_tolerance) stays tight at 0.035.
+    entry_angle_tolerance: float = 0.09  # rad, ~5 deg: loose enough to start, tight
+                                         # enough that the pin still meets the hole
     entry_height_tolerance: float = 0.005
     entry_confirm_steps: int = 3
     switch_duration_s: float = 0.3
     reference_speed: float = 0.02  # m/s, maximum axial reference motion
-    insertion_bias: float = 0.01  # virtual equilibrium below seat, contact-gated
+    # Virtual equilibrium below the seat (contact-gated). 2026-10-06: 0.01 -> 0.003 -> 0.0.
+    # Any positive bias makes the loop keep commanding a position below the seat, pressing
+    # the part into the 0.5 mm penetration allowance; the elastic energy stored there is
+    # released as soon as the seat freeze zeroes the gains, launching the part out of the
+    # seat (measured: gap -0.48 mm -> +127 mm in 2 steps) so a geometrically perfect seat
+    # misses the 5-step hold. With 0.0 the reference stops AT the seat, the contact itself
+    # provides the reaction, and the insertion still completes (the insertion never needed
+    # more than the 8 N free-space force cap: measured commanded |Fz| peak = 8.00 N).
+    insertion_bias: float = 0.0
     fixed_stage_weight: float = 0.5  # no_stage ablation
     # Steady downward preload (N) applied once the ORU is geometrically seated and
     # the feedback gains are frozen. Zeroing the gains alone is not enough: the ORU
@@ -51,7 +65,12 @@ class OruTaskCfg:
     # contact penetration allowance is consumed. A constant force holds it seated
     # without position feedback, so it cannot pump the spring/contact limit cycle
     # that the bouncing came from.
-    hold_force: float = 3.0
+    hold_force: float = 8.0   # 2026-10-06: was 3.0. The frozen seat has no
+                              # feedback, so this force alone has to hold the part
+                              # against the contact spring; 3 N was too weak to
+                              # arrest a depenetration push. Kept below the ~14 N
+                              # contact peak so the force-peak metric is not simply
+                              # set by the preload.
     torque_scale: float = 1.0  # no assumed inverse-decimation compensation
     joint_torque_limit: float = 100.0
     oru_seat_z: float = 0.03750  # = success_z 0.4298 - measured chain offset 0.39230
