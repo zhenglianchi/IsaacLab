@@ -282,14 +282,6 @@ class OruEnv(DirectRLEnv):
         scale_kp = torch.clamp(scale_kp, min=0.05, max=5.0)
         scale_kd = 1.0 + self.actions[:, 6:12] * self.gain_range
         scale_kd = torch.clamp(scale_kd, min=0.05, max=5.0)
-        # Learned soft switch (user decision 2026-10-06): the extra action dim drives
-        # alpha, so the policy decides WHEN to become compliant instead of the env's
-        # contact threshold. Rate-limited to switch_duration_s at policy rate.
-        if getattr(self.cfg.task, "switch_mode", "contact") == "learned":
-            _a = (0.5 * (self.actions[:, 12] + 1.0)).clamp(0.0, 1.0)
-            _dl = min(1.0, self.physics_dt / max(self.cfg.task.switch_duration_s, 1e-3))
-            self._stage_alpha = self._stage_alpha + (_a - self._stage_alpha).clamp(-_dl, _dl)
-            self._contact_alpha = self._stage_alpha
 
         self.task_prop_gains = self.base_gains * scale_kp
         self.task_deriv_gains = self.base_deriv * scale_kd
@@ -408,11 +400,9 @@ class OruEnv(DirectRLEnv):
             "applied_wrench": self.applied_wrench,
             # TRUE wrist reaction force — applied_wrench is the commanded PD
             # output, not a contact signal.
-            # 2026-10-06 (user decision): the policy sees the ORU<->ground CONTACT force,
-            # used as the proxy for the real robot's wrist force/torque sensor. The wrist
-            # reaction it replaces mixes in chain inertia (3.9-5.9 N free space vs 2-10 N
-            # seated), so it cannot support learning WHEN to switch.
-            "measured_force": self._get_contact_force_vec(),
+            "measured_force": self.robot.data.body_incoming_joint_wrench_b[
+                :, self._ee_frame_idx, :3
+            ],
             "stage_state": torch.stack(
                 (self._insertion_phase.float(), self._stage_alpha, self._contact_alpha,
                  self._control_z - self.fixed_target_z, self._best_insertion_gap), dim=-1

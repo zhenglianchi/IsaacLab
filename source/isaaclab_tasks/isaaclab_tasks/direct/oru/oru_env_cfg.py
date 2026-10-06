@@ -256,7 +256,7 @@ class OruEnvCfg(DirectRLEnvCfg):
     """
 
     decimation: int = 8
-    action_space: int = 13  # 12 gain multipliers + 1 learned switch alpha  # 6 Kp + 6 Kd gain multipliers  # 6 Kp + 6 Kd gain multipliers
+    action_space: int = 12  # 12 gain multipliers + 1 learned switch alpha  # 6 Kp + 6 Kd gain multipliers  # 6 Kp + 6 Kd gain multipliers
     observation_space: int = 0   # computed at init
     state_space: int = 0
 
