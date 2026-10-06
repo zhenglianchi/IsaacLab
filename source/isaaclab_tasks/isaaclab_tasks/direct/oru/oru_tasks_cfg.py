@@ -99,7 +99,9 @@ class OruTaskCfg:
     # over an episode of up to 1350 steps, so an early success otherwise yields
     # O(3e4). It is a uniform factor, so the relative ordering of all reward
     # terms - and therefore the optimal policy - is unchanged.
-    reward_scale: float = 0.01
+    reward_scale: float = 1.0   # uniform factor on the total reward; 1.0 since
+                                # terminating on success brought the raw return to
+                                # O(1e3) on its own
 
     # ── Success thresholds (measured on the ORU body) ─────────────
     # The ORU is the part that enters the slot, so the seat test reads the ORU pose
@@ -114,10 +116,14 @@ class OruTaskCfg:
                                       # uses seat_z_tolerance / xy_tolerance /
                                       # seat_angle_tolerance instead.
     engage_threshold: float = 0.90    # 90 % of ground height → engaged
-    # Completion bonus (per step while success holds). Must dominate the
-    # per-step income, or the policy parks near the target instead of
-    # finishing the insertion.
-    success_reward: float = 40.0
+    # One-time completion bonus, paid on the step the seat criterion first holds (the
+    # episode terminates on that step, see oru_env._get_dones). It must dominate the
+    # present value of parking with a good alignment score: w_align / (1 - gamma) =
+    # 2 / 0.005 = 400. A small terminal bonus makes "park before contact" optimal.
+    success_bonus: float = 1000.0
+    # LEGACY, no longer read: the per-step hold bonus used before the episode was
+    # terminated on success. Kept only so old config dumps still load.
+    success_reward: float = 0.0
 
     # ── Two-stage reward: stage 1 path keypoints (free space) ──────
     # N keypoints evenly spaced on the straight line start→target

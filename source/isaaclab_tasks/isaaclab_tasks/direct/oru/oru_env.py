@@ -149,6 +149,10 @@ class OruEnv(DirectRLEnv):
         self._contact_alpha = torch.zeros(N, device=self.device)
         self._control_z = torch.full((N,), self.fixed_target_z + self.cfg.task.preinsert_height, device=self.device)
         self._stable_success = torch.zeros(N, dtype=torch.bool, device=self.device)
+        # Set in _get_dones on the single step the seat criterion first holds; consumed
+        # by _get_rewards for the one-time completion bonus (the episode terminates on
+        # that same step, so this is the terminal reward).
+        self._first_success = torch.zeros(N, dtype=torch.bool, device=self.device)
         # Geometry-only seat latch (no velocity gate). Drives the controller freeze:
         # freezing on the full seat test is circular, because the bounce that the
         # control force causes is exactly what keeps the velocity gates unsatisfied.
@@ -601,12 +605,12 @@ class OruEnv(DirectRLEnv):
         rew -= self.cfg.task.action_grad_penalty_scale * torch.norm(
             self.actions - self.prev_actions, p=2, dim=-1
         )
-        curr_s = self._stable_success
-        # Completion bonus — must dominate the per-step income or the policy
-        # settles for "hover near target" (success +1 vs align +1.8/step was
-        # net-negative to finish). Paid every step success holds, so keeping
-        # the seat is also rewarded.
-        rew += curr_s.float() * self.cfg.task.success_reward
+        # One-time completion bonus, paid on the step the seat criterion first holds.
+        # The episode terminates on that same step (see _get_dones), so this is the
+        # terminal reward. It has to dominate the present value of staying parked with a
+        # good alignment score, which is about w_align / (1 - gamma) = 2 / 0.005 = 400,
+        # hence the O(1e3) value; a small bonus would make "park before contact" optimal.
+        rew += self._first_success.float() * self.cfg.task.success_bonus
 
         # Logging + state update
         self.prev_actions = self.actions.clone()
@@ -670,8 +674,19 @@ class OruEnv(DirectRLEnv):
         first = self._stable_success & ~self.ep_succeeded
         self.ep_success_times[first] = self.episode_length_buf[first]
         self.ep_succeeded |= self._stable_success
+        self._first_success = first
         time_out = self.episode_length_buf >= self.max_episode_length - 1
-        return torch.zeros_like(time_out), time_out
+        # The task is DONE once the seat criterion has held for success_hold_s, so the
+        # episode terminates here instead of idling until the 90 s timeout. Reasons:
+        #   1. completion events then arrive asynchronously (envs finish at different
+        #      times), so the reward meter and episode_success_rate update continuously
+        #      instead of in one 64-env batch every ~10 epochs (the episode used to span
+        #      1350/128 = 10.5 epochs, so 100 epochs produced only ~9 reward points);
+        #   2. the return no longer scales with the time left in the episode;
+        #   3. a timeout now means failure, so the episode budget is spent on attempts
+        #      that still have a chance instead of on holding a finished assembly.
+        terminated = self._stable_success.clone()
+        return terminated, time_out
 
     # ==================================================================
     # Reset
@@ -691,6 +706,7 @@ class OruEnv(DirectRLEnv):
         self._entry_count[env_ids] = 0
         self._contact_count[env_ids] = 0
         self._success_count[env_ids] = 0
+        self._first_success[env_ids] = False
         self._seat_geom_count[env_ids] = 0
         self._seat_latched[env_ids] = False
         self._stable_success[env_ids] = False
