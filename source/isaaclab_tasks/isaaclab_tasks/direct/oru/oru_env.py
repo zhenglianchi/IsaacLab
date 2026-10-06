@@ -307,6 +307,15 @@ class OruEnv(DirectRLEnv):
         scale_kp = torch.clamp(scale_kp, min=0.05, max=5.0)
         scale_kd = 1.0 + self.actions[:, 6:12] * self.gain_range
         scale_kd = torch.clamp(scale_kd, min=0.05, max=5.0)
+        # Learned soft switch (routes B/D): the extra action dim drives alpha, replacing
+        # the contact-driven blend when switch_mode == "learned". The contact trigger
+        # stays available as the ablation baseline. Applied every substep, so the rate
+        # limit matches the contact version's 1 switch_duration_s at policy rate.
+        if getattr(self.cfg.task, "switch_mode", "contact") == "learned":
+            _a = (0.5 * (self.actions[:, 12] + 1.0)).clamp(0.0, 1.0)
+            _dl = min(1.0, self.physics_dt / max(self.cfg.task.switch_duration_s, 1e-3))
+            self._stage_alpha = self._stage_alpha + (_a - self._stage_alpha).clamp(-_dl, _dl)
+            self._contact_alpha = self._stage_alpha
 
         self.task_prop_gains = self.base_gains * scale_kp
         self.task_deriv_gains = self.base_deriv * scale_kd
