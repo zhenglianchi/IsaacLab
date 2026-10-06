@@ -170,39 +170,12 @@ class OruEnv(DirectRLEnv):
         self._ep_tau = torch.zeros(N, device=self.device)
         self._ep_fxy = torch.zeros(N, device=self.device)
         self._ep_tauz = torch.zeros(N, device=self.device)
-        self._ep_fw = torch.zeros(N, device=self.device)    # wrist |F| peak
-        self._ep_fwz = torch.zeros(N, device=self.device)   # wrist axial |F_z| peak
-        self._ep_cf = torch.zeros((N, 3), device=self.device)
-        self._ep_cf_min = torch.full((N, 3), float('inf'), device=self.device)
-        self._ep_wf = torch.zeros((N, 3), device=self.device)
-        self._ep_wf_min = torch.full((N, 3), float('inf'), device=self.device)
-        self._ep_wt = torch.zeros((N, 3), device=self.device)
-        self._ep_wt_min = torch.full((N, 3), float('inf'), device=self.device)
-        # Contact torque exists only in some IsaacLab/PhysX versions - probe at runtime.
-        self._ct_src = None
-        for _nm in ('net_torques_w', 'torque_matrix_w'):
-            if hasattr(self.contact_sensor.data, _nm):
-                self._ct_src = _nm
-                break
-        self._ep_ct = torch.zeros((N, 3), device=self.device)
-        self._ep_ct_min = torch.full((N, 3), float('inf'), device=self.device)
-        _base_cols = ('step,env,success,steps,force_peak_N,contact_flips,attitude_rms_rad,'
-                      'angspd_rms_rad_s,wrist_tau_peak_Nm,wrist_fxy_peak_N,wrist_tauz_peak_Nm,'
-                      'wrist_f_peak_N,wrist_fz_peak_N,'
-                      'cf_x_max,cf_x_min,cf_y_max,cf_y_min,cf_z_max,cf_z_min,'
-                      'wf_x_max,wf_x_min,wf_y_max,wf_y_min,wf_z_max,wf_z_min,'
-                      'wt_x_max,wt_x_min,wt_y_max,wt_y_min,wt_z_max,wt_z_min')
-        if self._ct_src:
-            _base_cols += ',ct_x_max,ct_x_min,ct_y_max,ct_y_min,ct_z_max,ct_z_min'
-        _mp = pathlib.Path(self._ep_metrics_path)
-        _mp.parent.mkdir(parents=True, exist_ok=True)
-        if not _mp.exists():
-            _mp.write_text(_base_cols + '\n', encoding='utf-8')
-        print('[oru] episode metrics columns:', _base_cols.count(',') + 1, '| contact torque source:', self._ct_src)
         self._ep_touch = torch.zeros(N, dtype=torch.bool, device=self.device)
         self._ep_metrics_path = 'logs/oru_episode_metrics.csv'
         _mp = pathlib.Path(self._ep_metrics_path)
         _mp.parent.mkdir(parents=True, exist_ok=True)
+        if not _mp.exists():
+            _mp.write_text('step,env,success,steps,force_peak_N,contact_flips,attitude_rms_rad,angspd_rms_rad_s,wrist_tau_peak_Nm,wrist_fxy_peak_N,wrist_tauz_peak_Nm\n', encoding='utf-8')
         # Geometry-only seat latch (no velocity gate). Drives the controller freeze:
         # freezing on the full seat test is circular, because the bounce that the
         # control force causes is exactly what keeps the velocity gates unsatisfied.
@@ -309,15 +282,6 @@ class OruEnv(DirectRLEnv):
         scale_kp = torch.clamp(scale_kp, min=0.05, max=5.0)
         scale_kd = 1.0 + self.actions[:, 6:12] * self.gain_range
         scale_kd = torch.clamp(scale_kd, min=0.05, max=5.0)
-        # Learned soft switch (routes B/D): the extra action dim drives alpha, replacing
-        # the contact-driven blend when switch_mode == "learned". The contact trigger
-        # stays available as the ablation baseline. Applied every substep, so the rate
-        # limit matches the contact version's 1 switch_duration_s at policy rate.
-        if getattr(self.cfg.task, "switch_mode", "contact") == "learned":
-            _a = (0.5 * (self.actions[:, 12] + 1.0)).clamp(0.0, 1.0)
-            _dl = min(1.0, self.physics_dt / max(self.cfg.task.switch_duration_s, 1e-3))
-            self._stage_alpha = self._stage_alpha + (_a - self._stage_alpha).clamp(-_dl, _dl)
-            self._contact_alpha = self._stage_alpha
 
         self.task_prop_gains = self.base_gains * scale_kp
         self.task_deriv_gains = self.base_deriv * scale_kd
@@ -547,19 +511,6 @@ class OruEnv(DirectRLEnv):
         self._ep_tau = torch.maximum(self._ep_tau, torch.linalg.vector_norm(_wb[:, 3:], dim=-1))
         self._ep_fxy = torch.maximum(self._ep_fxy, torch.linalg.vector_norm(_fw[:, :2], dim=-1))
         self._ep_tauz = torch.maximum(self._ep_tauz, _tw[:, 2].abs())
-        self._ep_fw = torch.maximum(self._ep_fw, torch.linalg.vector_norm(_fw, dim=-1))
-        self._ep_fwz = torch.maximum(self._ep_fwz, _fw[:, 2].abs())
-        _fc = self._get_contact_force_vec()
-        self._ep_cf = torch.maximum(self._ep_cf, _fc)
-        self._ep_cf_min = torch.minimum(self._ep_cf_min, _fc)
-        self._ep_wf = torch.maximum(self._ep_wf, _fw)
-        self._ep_wf_min = torch.minimum(self._ep_wf_min, _fw)
-        self._ep_wt = torch.maximum(self._ep_wt, _tw)
-        self._ep_wt_min = torch.minimum(self._ep_wt_min, _tw)
-        if self._ct_src is not None:
-            _ct = getattr(self.contact_sensor.data, self._ct_src).reshape(self.num_envs, -1, 3).sum(dim=1)
-            self._ep_ct = torch.maximum(self._ep_ct, _ct)
-            self._ep_ct_min = torch.minimum(self._ep_ct_min, _ct)
         (self._insertion_phase, self._entry_count, self._was_in_contact,
          self._contact_count, self._stage_alpha, self._contact_alpha,
          self._can_advance) = oru_logic.update_phase(
@@ -737,18 +688,7 @@ class OruEnv(DirectRLEnv):
                         round((float(self._ep_angspd2[_e].item()) / _n) ** 0.5, 5),
                         round(float(self._ep_tau[_e].item()), 4),
                         round(float(self._ep_fxy[_e].item()), 3),
-                        round(float(self._ep_tauz[_e].item()), 4),
-                        round(float(self._ep_fw[_e].item()), 3),
-                        round(float(self._ep_fwz[_e].item()), 3),
-                        *[round(float(v), 3) for v in self._ep_cf[_e].tolist()],
-                        *[round(float(v), 3) for v in self._ep_cf_min[_e].tolist()],
-                        *[round(float(v), 3) for v in self._ep_wf[_e].tolist()],
-                        *[round(float(v), 3) for v in self._ep_wf_min[_e].tolist()],
-                        *[round(float(v), 4) for v in self._ep_wt[_e].tolist()],
-                        *[round(float(v), 4) for v in self._ep_wt_min[_e].tolist()],
-                        *([round(float(v), 4) for v in self._ep_ct[_e].tolist()]
-                          + [round(float(v), 4) for v in self._ep_ct_min[_e].tolist()]
-                          if self._ct_src is not None else []))) + '\n')
+                        round(float(self._ep_tauz[_e].item()), 4))) + '\n')
             self._ep_fmax[_rb] = 0.0
             self._ep_flips[_rb] = 0.0
             self._ep_ang2[_rb] = 0.0
@@ -758,16 +698,6 @@ class OruEnv(DirectRLEnv):
             self._ep_tau[_rb] = 0.0
             self._ep_fxy[_rb] = 0.0
             self._ep_tauz[_rb] = 0.0
-            self._ep_fw[_rb] = 0.0
-            self._ep_fwz[_rb] = 0.0
-            self._ep_cf[_rb] = 0.0
-            self._ep_cf_min[_rb] = float('inf')
-            self._ep_wf[_rb] = 0.0
-            self._ep_wf_min[_rb] = float('inf')
-            self._ep_wt[_rb] = 0.0
-            self._ep_wt_min[_rb] = float('inf')
-            self._ep_ct[_rb] = 0.0
-            self._ep_ct_min[_rb] = float('inf')
         self.extras["rew_pos_error"] = torch.norm(self.ee_pos - target_ref_pos, dim=-1).mean()
         self.extras["rew_contact_degree"] = contact_degree.mean()
         # Global scale applied here (not in rl_games' reward_shaper) so that the reward

@@ -318,4 +318,4 @@ class OruTaskCfg:
     # become compliant" is output by the policy. "contact" keeps the contact-force
     # trigger, which is the ablation baseline (and the only one that needs the contact
     # sensor, which does not exist on the real robot).
-    switch_mode: str = "learned"
+    switch_mode: str = "contact"
