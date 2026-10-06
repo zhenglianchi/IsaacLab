@@ -617,7 +617,11 @@ class OruEnv(DirectRLEnv):
             self.extras["log"] = {"episode_success_rate": self.ep_succeeded[self.reset_buf].float().mean()}
         self.extras["rew_pos_error"] = torch.norm(self.ee_pos - target_ref_pos, dim=-1).mean()
         self.extras["rew_contact_degree"] = contact_degree.mean()
-        return rew
+        # Global scale applied here (not in rl_games' reward_shaper) so that the reward
+        # rl_games logs/prints - which it takes from the UNSHAPED stream - equals the
+        # reward the policy is trained on. Uniform factor: the relative ordering of all
+        # terms is unchanged. See OruTaskCfg.reward_scale.
+        return rew * task.reward_scale
 
     def _ee_pose_errors(self):
         """Same three errors measured on the EE frame. NOT the criterion.

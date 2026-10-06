@@ -86,6 +86,21 @@ class OruTaskCfg:
     fixed_ik_offset_pos: tuple | None = None
     fixed_ik_offset_rot: tuple | None = None
 
+    # ── Global reward scale ────────────────────────────────────────
+    # Applied INSIDE the environment, as the last step of _get_rewards. It has to
+    # live here rather than in rl_games' reward_shaper: rl_games accumulates the
+    # LOGGED/printed episode reward from the UNSHAPED reward
+    # (a2c_common.py:782 `current_rewards += rewards` then :789
+    #  `game_rewards.update(current_rewards[...])`), so a shaper-only change would
+    # silently scale the training signal while still printing tens of thousands.
+    # With the scale here, the logged reward, the printed 'saving next best
+    # rewards' and the trained signal are all the same number.
+    # Why 0.01: the completion bonus is paid every step the seat holds (40/step)
+    # over an episode of up to 1350 steps, so an early success otherwise yields
+    # O(3e4). It is a uniform factor, so the relative ordering of all reward
+    # terms - and therefore the optimal policy - is unchanged.
+    reward_scale: float = 0.01
+
     # ── Success thresholds (measured on the ORU body) ─────────────
     # The ORU is the part that enters the slot, so the seat test reads the ORU pose
     # (oru_env._oru_pose_errors). The EE reading is only 0.2-0.7 mm away laterally
