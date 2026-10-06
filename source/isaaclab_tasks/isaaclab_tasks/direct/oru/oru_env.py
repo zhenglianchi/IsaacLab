@@ -19,6 +19,7 @@ Domain randomization (reset-time):
 
 from __future__ import annotations
 
+import pathlib
 import math
 import torch
 
@@ -158,6 +159,20 @@ class OruEnv(DirectRLEnv):
         self._oru_angspd = torch.zeros(N, device=self.device)
         self._oru_prev_pos = None
         self._oru_prev_quat = None
+        # Per-episode metrics -> logs/oru_episode_metrics.csv, same quantities as the C0
+        # analysis (contact threshold and finite-difference angular speed), so the fixed-gain
+        # baseline and a trained checkpoint are comparable.
+        self._ep_fmax = torch.zeros(N, device=self.device)
+        self._ep_flips = torch.zeros(N, device=self.device)
+        self._ep_ang2 = torch.zeros(N, device=self.device)
+        self._ep_angspd2 = torch.zeros(N, device=self.device)
+        self._ep_steps = torch.zeros(N, device=self.device)
+        self._ep_touch = torch.zeros(N, dtype=torch.bool, device=self.device)
+        self._ep_metrics_path = 'logs/oru_episode_metrics.csv'
+        _mp = pathlib.Path(self._ep_metrics_path)
+        _mp.parent.mkdir(parents=True, exist_ok=True)
+        if not _mp.exists():
+            _mp.write_text('step,env,success,steps,force_peak_N,contact_flips,attitude_rms_rad,angspd_rms_rad_s\n', encoding='utf-8')
         # Geometry-only seat latch (no velocity gate). Drives the controller freeze:
         # freezing on the full seat test is circular, because the bounce that the
         # control force causes is exactly what keeps the velocity gates unsatisfied.
@@ -479,6 +494,14 @@ class OruEnv(DirectRLEnv):
         # is rigid to 0.02 mm vertically / 0.2-0.7 mm laterally, but the ORU is the
         # part that actually enters the slot, so it stays the criterion.
         xy, gap, angle = self._oru_pose_errors()
+        _f = self._get_contact_force_mag()
+        _touch = _f > self.cfg.task.contact_force_threshold
+        self._ep_flips += (_touch != self._ep_touch).float()
+        self._ep_touch = _touch
+        self._ep_fmax = torch.maximum(self._ep_fmax, _f)
+        self._ep_ang2 += angle * angle
+        self._ep_angspd2 += self._oru_angspd * self._oru_angspd
+        self._ep_steps += 1.0
         (self._insertion_phase, self._entry_count, self._was_in_contact,
          self._contact_count, self._stage_alpha, self._contact_alpha,
          self._can_advance) = oru_logic.update_phase(
@@ -638,6 +661,22 @@ class OruEnv(DirectRLEnv):
         self.prev_reward_z = self.ee_pos[:, 2].clone()
         if torch.any(self.reset_buf):
             self.extras["log"] = {"episode_success_rate": self.ep_succeeded[self.reset_buf].float().mean(), "mean_prop_gain": self.task_prop_gains.mean().item(), "mean_deriv_gain": self.task_deriv_gains.mean().item()}
+        _rb = self.reset_buf.nonzero(as_tuple=False).flatten()
+        if len(_rb) > 0:
+            with open(self._ep_metrics_path, 'a', encoding='utf-8') as _fh:
+                for _e in _rb.tolist():
+                    _n = max(int(self._ep_steps[_e].item()), 1)
+                    _fh.write(','.join(str(x) for x in (
+                        int(self.common_step_counter), _e, int(bool(self.ep_succeeded[_e].item())), _n,
+                        round(float(self._ep_fmax[_e].item()), 3), int(self._ep_flips[_e].item()),
+                        round((float(self._ep_ang2[_e].item()) / _n) ** 0.5, 5),
+                        round((float(self._ep_angspd2[_e].item()) / _n) ** 0.5, 5))) + '\n')
+            self._ep_fmax[_rb] = 0.0
+            self._ep_flips[_rb] = 0.0
+            self._ep_ang2[_rb] = 0.0
+            self._ep_angspd2[_rb] = 0.0
+            self._ep_steps[_rb] = 0.0
+            self._ep_touch[_rb] = False
         self.extras["rew_pos_error"] = torch.norm(self.ee_pos - target_ref_pos, dim=-1).mean()
         self.extras["rew_contact_degree"] = contact_degree.mean()
         # Global scale applied here (not in rl_games' reward_shaper) so that the reward
