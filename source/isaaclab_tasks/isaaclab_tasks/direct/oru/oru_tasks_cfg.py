@@ -182,7 +182,15 @@ class OruTaskCfg:
     # episode terminates on that step, see oru_env._get_dones). It must dominate the
     # present value of parking with a good alignment score: w_align / (1 - gamma) =
     # 2 / 0.005 = 400. A small terminal bonus makes "park before contact" optimal.
-    success_bonus: float = 1000.0
+    success_bonus: float = 3000.0
+    # 2026-10-06 (training diagnosis): the epilogue shaping (alignment / progress) could be
+    # farmed by parking near the seat without completing - present value of the shaping
+    # outweighed the one-off completion bonus, so the policy learned to stay compliant and
+    # slow, the part never arrived within the budget and the success rate collapsed to 0.
+    # These two penalties remove that optimum: a per-step cost while the part sits inside
+    # the seat band without having succeeded, and a one-off cost on a timeout.
+    hover_penalty: float = 1.0     # reward units per step while in band and not succeeded
+    timeout_penalty: float = 500.0  # one-off, on resetting without having succeeded
     # LEGACY, no longer read: the per-step hold bonus used before the episode was
     # terminated on success. Kept only so old config dumps still load.
     success_reward: float = 0.0
@@ -290,4 +298,4 @@ class OruTaskCfg:
     # Action[:6]  → Kp = base_Kp * (1 + a * gain_range)
     # Action[6:]  → Kd = base_Kd * (1 + a * gain_range)
     # Clamped to [5%, 500%] of base.
-    gain_range: float = 2.0
+    gain_range: float = 4.0

@@ -637,13 +637,20 @@ class OruEnv(DirectRLEnv):
         self.prev_dist_target = dist_target.clone()
         self.prev_reward_z = self.ee_pos[:, 2].clone()
         if torch.any(self.reset_buf):
-            self.extras["log"] = {"episode_success_rate": self.ep_succeeded[self.reset_buf].float().mean()}
+            self.extras["log"] = {"episode_success_rate": self.ep_succeeded[self.reset_buf].float().mean(), "mean_prop_gain": self.task_prop_gains.mean().item(), "mean_deriv_gain": self.task_deriv_gains.mean().item()}
         self.extras["rew_pos_error"] = torch.norm(self.ee_pos - target_ref_pos, dim=-1).mean()
         self.extras["rew_contact_degree"] = contact_degree.mean()
         # Global scale applied here (not in rl_games' reward_shaper) so that the reward
         # rl_games logs/prints - which it takes from the UNSHAPED stream - equals the
         # reward the policy is trained on. Uniform factor: the relative ordering of all
         # terms is unchanged. See OruTaskCfg.reward_scale.
+        # 2026-10-06: anti-hover / timeout penalties (see the task config).
+        _gap = self._oru_pose_errors()[1]
+        _band = _gap.abs() < 5.0 * task.seat_z_tolerance
+        _hover = (_band & ~self.ep_succeeded).float()
+        _timeout = ((self.episode_length_buf >= self.max_episode_length - 1)
+                    & ~self.ep_succeeded).float()
+        rew = rew - task.hover_penalty * _hover - task.timeout_penalty * _timeout
         return rew * task.reward_scale
 
     def _ee_pose_errors(self):
