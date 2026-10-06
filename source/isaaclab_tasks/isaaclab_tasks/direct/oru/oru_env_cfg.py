@@ -282,7 +282,7 @@ class OruEnvCfg(DirectRLEnvCfg):
     # longer episode does NOT change wall-clock per epoch - it only means fewer
     # resets (less start-pose variety per epoch) and more per-step reward
     # accumulation before a reset.
-    episode_length_s: float = 90.0
+    episode_length_s: float = 30.0
 
     ema_factor: float = 0.2
 
