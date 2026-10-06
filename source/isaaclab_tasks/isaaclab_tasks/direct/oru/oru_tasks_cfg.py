@@ -223,8 +223,8 @@ class OruTaskCfg:
                                        # optimal policy was to never touch (logs: contact_degree
                                        # 0.281 -> 0.000, return 765 -> 476). At 0.05 the deadline
                                        # pressure stays without dominating the completion bonus.  # per control step before stable success
-    insertion_xy_weight: float = 0.5    # cost at one XY tolerance
-    insertion_angle_weight: float = 0.5 # cost at one angle tolerance
+    insertion_xy_weight: float = 0.15    # cost at one XY tolerance
+    insertion_angle_weight: float = 0.15 # cost at one angle tolerance
     force_smooth_weight: float = 0.005         # ΔF penalty
     force_peak_threshold: float = 60.0         # force safety limit (N) — aligned with
                                                # max_task_force_z so the required
