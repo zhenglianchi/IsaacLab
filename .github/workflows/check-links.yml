@@ -36,6 +36,10 @@ jobs:
   check-links:
     name: Check for Broken Links
     runs-on: ubuntu-latest
+    # 2026-10-06: upstream documentation policy (lychee over every markdown file of the
+    # repository, fail on any broken link, plus a weekly schedule). It is not
+    # meaningful on a fork, so restrict it to the upstream repository.
+    if: github.repository == 'isaac-sim/IsaacLab'
 
     steps:
     - name: Checkout code
