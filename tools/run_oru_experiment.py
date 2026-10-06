@@ -10,7 +10,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--method', choices=['full', 'single', 'no_path', 'no_stage', 'hard_switch', 'all'], default='full')
     parser.add_argument('--seeds', type=int, nargs='+', default=[0])
-    parser.add_argument('--epochs', type=int, default=200)
+    parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--num-envs', type=int, default=64)
     parser.add_argument('--execute', action='store_true')
     args = parser.parse_args()

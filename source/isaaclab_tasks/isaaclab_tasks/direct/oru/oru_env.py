@@ -452,10 +452,10 @@ class OruEnv(DirectRLEnv):
             return
         self._last_logic_step = self.common_step_counter
         task = self.cfg.task
-        # Task geometry is read from the EE frame (see _ee_pose_errors); the ORU is
-        # rigidly linked to it, so this matches the previous ORU-based gates to
-        # within 0.02 mm vertically and 0.2-0.7 mm laterally.
-        xy, gap, angle = self._ee_pose_errors()
+        # Task geometry is read from the ORU body (see _oru_pose_errors); the EE link
+        # is rigid to 0.02 mm vertically / 0.2-0.7 mm laterally, but the ORU is the
+        # part that actually enters the slot, so it stays the criterion.
+        xy, gap, angle = self._oru_pose_errors()
         (self._insertion_phase, self._entry_count, self._was_in_contact,
          self._contact_count, self._stage_alpha, self._contact_alpha,
          self._can_advance) = oru_logic.update_phase(
@@ -529,9 +529,8 @@ class OruEnv(DirectRLEnv):
         task = self.cfg.task
         F_mag = self._get_measured_force_mag()
 
-        # Reward the actual task geometry (EE frame, same source as the seat test),
-        # never the virtual preload target.
-        xy, gap, angle = self._ee_pose_errors()
+        # Reward the actual ORU geometry, never the virtual preload target.
+        xy, gap, angle = self._oru_pose_errors()
         remaining = gap.clamp(min=0)
         aligned = (xy < task.entry_xy_tolerance) & (angle < task.entry_angle_tolerance)
         valid_progress = aligned & (gap >= -task.seat_z_tolerance)
@@ -621,18 +620,15 @@ class OruEnv(DirectRLEnv):
         return rew
 
     def _ee_pose_errors(self):
-        """Task geometry measured on the EE frame (the criterion used everywhere).
+        """Same three errors measured on the EE frame. NOT the criterion.
 
-        The ORU is bolted to the EE through the fixed-joint chain, and that link is
-        effectively rigid here: measured over 14 runs, ``ee_z - oru_z`` is
-        0.39228-0.39230 m (0.02 mm spread) and the lateral EE/ORU offset at the seat
-        is 0.30-0.90 mm vs 0.07-0.44 mm for the ORU (so the EE criterion is
-        0.2-0.7 mm stricter laterally, i.e. ~1/3 of the 2 mm tolerance); the
-        implied EE/ORU angular difference over the 392 mm link is <= 0.001 rad
-        against a 0.035 rad tolerance. Hence the seat test is expressed on the EE,
-        which is also the pose the policy actually commands.
-
-        Returns (xy vs docking surface, z gap vs EE seat height, tilt vs target quat).
+        Kept so diagnostics can quantify the EE/ORU link (measured over 14 runs:
+        ``ee_z - oru_z`` = 0.39228-0.39230 m, 0.02 mm spread; lateral EE/ORU offset
+        at the seat 0.30-0.90 mm vs 0.07-0.44 mm for the ORU, i.e. an EE criterion
+        would be 0.2-0.7 mm stricter; implied angular difference <= 0.001 rad over
+        the 392 mm link). The task uses the ORU body instead (_oru_pose_errors): the
+        ORU is the part that actually enters the slot, and the chain is compliant
+        enough laterally that "EE in place" does not by itself prove the part is.
         """
         task = self.cfg.task
         target = self.ground.data.root_pos_w
@@ -643,8 +639,7 @@ class OruEnv(DirectRLEnv):
         return xy, gap, angle
 
     def _oru_pose_errors(self):
-        """Same errors measured on the ORU body; kept for diagnostics and for the
-        geometric ground truth (see tools/check_stage_switch.py)."""
+        """Seat geometry on the ORU body - the criterion for success, reward and gates."""
         task = self.cfg.task
         pos = self.oru.data.root_pos_w
         target = self.ground.data.root_pos_w
@@ -655,10 +650,10 @@ class OruEnv(DirectRLEnv):
         return xy, gap, angle
 
     def _get_curr_successes(self, threshold: float) -> torch.Tensor:
-        """EE seat pose (see _ee_pose_errors), bounded depth, orientation and low velocity."""
-        xy, gap, angle = self._ee_pose_errors()
-        speed = torch.linalg.vector_norm(self.ee_linvel, dim=-1)
-        angular_speed = torch.linalg.vector_norm(self.ee_angvel, dim=-1)
+        """Actual ORU seat pose (_oru_pose_errors), bounded depth, orientation, low velocity."""
+        xy, gap, angle = self._oru_pose_errors()
+        speed = torch.linalg.vector_norm(self.oru.data.root_lin_vel_w, dim=-1)
+        angular_speed = torch.linalg.vector_norm(self.oru.data.root_ang_vel_w, dim=-1)
         return oru_logic.seat_candidate(xy, gap, angle, speed, angular_speed, cfg=self.cfg.task)
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:

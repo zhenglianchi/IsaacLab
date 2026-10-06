@@ -77,8 +77,8 @@ def report(path):
                       "hint": "re-run tools/diagnose_oru_v2.py with the current code to regenerate it"}
     step = col(rows, "step").astype(int)
     oru_z = col(rows, "oru_z")
-    # the seat criterion is EE-based (oru_env._ee_pose_errors); fall back for older CSVs
-    gap_col = "ee_gap_to_seat_m" if "ee_gap_to_seat_m" in rows[0] else "gap_to_seat_m"
+    # the seat criterion is ORU-based (oru_env._oru_pose_errors); EE gap as fallback
+    gap_col = "gap_to_seat_m" if "gap_to_seat_m" in rows[0] else "ee_gap_to_seat_m"
     gap_mm = col(rows, gap_col) * 1000.0
     fc = col(rows, "contact_force_N")
     fvec = np.stack([col(rows, "contact_fx"), col(rows, "contact_fy"), col(rows, "contact_fz")], axis=1)

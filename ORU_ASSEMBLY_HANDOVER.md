@@ -63,15 +63,14 @@ test0 的训练奖励约在第160轮后进入相对平台；第21–40轮已快�
 5. 退到就位点上方9cm以上，重新进入接近阶段；奖励混合本身也使用0.3秒渐变。
 
 末端就位参考Z=0.42980m，预插入Z=0.50980m，虚拟参考最低Z=0.41980m。
-**判据改在 EE 位姿上（2026-10-05）**：成功要求 EE 高度误差 <2mm（即 EE z ∈ 0.42780–0.43180）、
-横向误差 <2mm、角度误差 <0.035rad、线速度 <0.01m/s、角速度 <0.05rad/s，连续 5 步（15Hz，至少 0.3 秒）成立。
-判定与奖励、阶段门、就位冻结全部读同一个来源 `oru_env._ee_pose_errors()`。
+实际ORU就位Z=0.03750m（= 0.42980 − 实测链偏置0.39230），成功要求XY及高度误差均<2mm、角度误差<0.035rad、
+线速度<0.01m/s、角速度<0.05rad/s，连续5步（15Hz，至少0.3秒）成立。
+判定读 ORU 本体位姿（`oru_env._oru_pose_errors()`），奖励、阶段门与就位冻结同源。
 
-**为什么 EE 判据与 ORU 判据等效（实测，不是假设）**：ORU 经固定关节链栓在 EE 上，14 次诊断运行统计——
-纵向 `ee_z − oru_z` 恒为 0.39228–0.39230（离散 **0.02 mm**）；就位时横向 `|EE−对接面|` 0.30–0.90mm
-对 `|ORU−对接面|` 0.07–0.44mm，即 **EE 判据横向严格 0.2–0.7mm**（约为 2mm 容差的 1/3）；
-按 392mm 臂长反推 EE/ORU 夹角 **≤0.001 rad**（容差 0.035rad）。
-对应的 ORU 高度 0.03750m（= 0.42980 − 实测链偏置 0.39230）现仅用于诊断与接触真值参考。
+> EE 与 ORU 的刚性程度（实测 14 次运行，供论文讨论"该用哪个信号"）：纵向 `ee_z − oru_z` 恒为
+> 0.39228–0.39230（离散 **0.02 mm**）；就位时横向 `|EE−对接面|` 0.30–0.90mm 对 `|ORU−对接面|` 0.07–0.44mm，
+> 即 EE 判据会横向严格 0.2–0.7mm（约 2mm 容差的 1/3）；按 392mm 臂长反推 EE/ORU 夹角 **≤0.001 rad**。
+> 曾于 2026-10-05 短暂改用 EE 判据，同日按要求恢复为 ORU 判据；`_ee_pose_errors()` 保留供诊断对比。
 
 **2026-10-05 几何标定（本次关键结论）**
 
@@ -147,7 +146,7 @@ test0 的训练奖励约在第160轮后进入相对平台；第21–40轮已快�
 项目根目录、激活env_isaaclab后，直接使用项目自带训练入口：
 
 ```powershell
-python scripts/reinforcement_learning/rl_games/train.py --task Isaac-Oru-Direct-v0 --num_envs 64 --headless --seed 0 --max_iterations 200 env.task.experiment_method=full agent.params.config.full_experiment_name=test1
+python scripts/reinforcement_learning/rl_games/train.py --task Isaac-Oru-Direct-v0 --num_envs 64 --headless --seed 0 --max_iterations 100 env.task.experiment_method=full agent.params.config.full_experiment_name=test1
 ```
 
 上面是 test1 的启动命令（test0 的日志目录已删除，不能复用）。后续新实验继续换名。
@@ -169,17 +168,17 @@ python scripts/reinforcement_learning/rl_games/train.py --task Isaac-Oru-Direct-
 
 ```powershell
 # 单组试训
-python tools/run_oru_experiment.py --method full --seeds 0 --epochs 200 --num-envs 64 --execute
+python tools/run_oru_experiment.py --method full --seeds 0 --epochs 100 --num-envs 64 --execute
 
 # 全部学习组 × 3 种子（full/single/no_path/no_stage/hard_switch 共 5 组）
-python tools/run_oru_experiment.py --method all --seeds 0 1 2 --epochs 200 --num-envs 64 --execute
+python tools/run_oru_experiment.py --method all --seeds 0 1 2 --epochs 100 --num-envs 64 --execute
 ```
 
 求值口径：先看真实 ORU 深度、阶段、姿态与成功率，**不以训练回报跨方法排名**；正式结论还需统一独立测试工况。
 
 ### 训练脚本相关的固定约定
 
-- 64 环境；200 epoch；horizon128；minibatch512；mini_epochs4；每次训练用唯一目录名。
+- 64 环境；**100 epoch**（2026-10-05 由 200 下调）；horizon128；minibatch512；mini_epochs4；每次训练用唯一目录名。
 - checkpoint 只保留奖励最高的权重：`save_frequency: 0`（关闭周期存档）、`save_best_after: 10`；
   训练结束时 rl_games 会硬编码多写一个最终轮 `last_*`，不需要就删掉。
 - 回合预算 90 秒（1350 步，约 10.5 个 horizon）；IK 用实际当前位姿迭代，子集重置不推进物理；起点随机化先在 ±1cm、各轴 ±1°。

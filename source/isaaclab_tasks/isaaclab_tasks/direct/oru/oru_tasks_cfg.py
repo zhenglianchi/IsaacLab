@@ -25,11 +25,12 @@ class OruTaskCfg:
     # This matches the Ground config pos + rot. The policy always targets
     # this same pose — domain randomization is on the START, not the GOAL.
     #
-    # EE pose when the ORU is fully docked: control target AND seat-criterion
-    # reference (the task geometry is read on the EE frame, see _ee_pose_errors).
+    # EE control target: the impedance anchor aims here. The SUCCESS criterion is
+    # measured on the ORU body instead (oru_seat_z below) - the ORU is the part
+    # that enters the slot.
     target_pos: tuple = (0.4, 0.0, 0.4298)
     target_quat: tuple = (0.0, 0.0, 1.0, 0.0)
-    # Seat height (EE Z, world): the ORU is fully docked when the EE z reaches this.
+    # EE approach/control height (world). NOT the success reference.
     success_z: float = 0.4298
 
     # v2 pilot parameters, to be calibrated on validation runs before the suite.
@@ -54,11 +55,10 @@ class OruTaskCfg:
     torque_scale: float = 1.0  # no assumed inverse-decimation compensation
     joint_torque_limit: float = 100.0
     oru_seat_z: float = 0.03750  # = success_z 0.4298 - measured chain offset 0.39230
-    # (2026-10-05: was the legacy 0.03742; re-derived from the EE success height the
-    #  penetration-calibrated run actually reaches, so the ORU criterion matches it.
-    #  Since the task geometry moved to the EE frame this field only feeds the
-    #  ORU-based diagnostics / the geometric contact truth; the ORU-EE link is rigid
-    #  to 0.02 mm vertically, so it describes the same seat.)
+    # (2026-10-05: was the legacy 0.03742; re-derived from the EE height the
+    #  penetration-calibrated run actually reaches, so the ORU criterion matches the
+    #  commanded target. Measured: ee_z - oru_z is 0.39228-0.39230 over 14 runs, so
+    #  the two references describe the same seat to 0.02 mm.)
     oru_seat_quat: tuple = (0.0, 1.0, 0.0, 0.0)
     seat_z_tolerance: float = 0.002
     seat_angle_tolerance: float = 0.035
@@ -86,11 +86,11 @@ class OruTaskCfg:
     fixed_ik_offset_pos: tuple | None = None
     fixed_ik_offset_rot: tuple | None = None
 
-    # ── Success thresholds (all measured on the EE frame) ─────────
-    # The ORU is rigidly bolted to the EE through the fixed-joint chain (measured:
-    # 0.02 mm vertically, 0.2-0.7 mm laterally at the seat), so the seat test is
-    # expressed on the EE pose - the pose the policy commands and the one used for
-    # the reference anchor. See oru_env._ee_pose_errors.
+    # ── Success thresholds (measured on the ORU body) ─────────────
+    # The ORU is the part that enters the slot, so the seat test reads the ORU pose
+    # (oru_env._oru_pose_errors). The EE reading is only 0.2-0.7 mm away laterally
+    # and 0.02 mm vertically, but "EE in place" does not by itself prove the part
+    # is: _ee_pose_errors() is kept for the diagnostic comparison.
     # XY centering on docking surface
     xy_tolerance: float = 0.002       # 2 mm
     # Z height fraction of ground-surface height for success

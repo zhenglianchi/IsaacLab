@@ -71,7 +71,7 @@ params:
     schedule_type: standard
     kl_threshold: 0.008
     score_to_win: 20000
-    max_epochs: 200
+    max_epochs: 100
     # Checkpoint policy: keep ONLY the highest-reward weights.
     #   save_frequency: 0    -> disables the periodic "last_<name>_ep_..._rew_..." dumps
     #                           (rl_games a2c_common.py: `if self.save_freq > 0`)
