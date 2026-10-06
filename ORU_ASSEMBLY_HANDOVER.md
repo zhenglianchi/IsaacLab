@@ -179,6 +179,17 @@ python tools/run_oru_experiment.py --method all --seeds 0 1 2 --epochs 100 --num
 ### 训练脚本相关的固定约定
 
 - 64 环境；**100 epoch**（2026-10-05 由 200 下调）；horizon128；minibatch512；mini_epochs4；每次训练用唯一目录名。
+- **配置里不得出现 `score_to_win`**：rl_games 把它当提前退出阈值（`a2c_common.py:1123-1132`：超过即打印
+  `Maximum reward achieved. Network won!` 并 `should_exit`）。该键留存的是 15 秒回合时代的 20000，
+  而回合回报随预算线性放大（成功奖励 40/步 × 最多 1350 步），90 秒回合下健康回报已达数万——
+  实测第 11 轮 31837 就触发退出、训练在 416 秒后结束。删除该键即可彻底关闭（分支有
+  `if 'score_to_win' in self.config` 保护）。
+- **`full_experiment_name` 必须显式覆盖**：注册配置里它是 `null`，而 `train.py:150` 与 `play.py:120` 都用
+  `.get(key, 默认值)`（键存在但值为 None 时不取默认值）→ 不覆盖会在 train 时 `os.path.join(path, None)`
+  抛 TypeError、在 play 时 `re.match(None, ...)` 抛 TypeError。play 更稳妥的用法是直接 `--checkpoint <路径>`。
+- play 求值：默认（不加 `--use_last_checkpoint`）取 `<name>.pth` 即最佳权重；加了会按字典序取最后一个文件
+  （`save_frequency: 0` 时通常是训练结束时写的 `last_*`）。求值还应加
+  `agent.params.config.player.deterministic=True`（配置默认 False，会带探索噪声）。
 - checkpoint 只保留奖励最高的权重：`save_frequency: 0`（关闭周期存档）、`save_best_after: 10`；
   训练结束时 rl_games 会硬编码多写一个最终轮 `last_*`，不需要就删掉。
 - 回合预算 90 秒（1350 步，约 10.5 个 horizon）；IK 用实际当前位姿迭代，子集重置不推进物理；起点随机化先在 ±1cm、各轴 ±1°。

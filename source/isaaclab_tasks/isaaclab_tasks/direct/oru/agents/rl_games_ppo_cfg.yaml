@@ -70,7 +70,16 @@ params:
     lr_schedule: adaptive
     schedule_type: standard
     kl_threshold: 0.008
-    score_to_win: 20000
+    # NO 'score_to_win' on purpose. rl_games treats it as an early-stop threshold:
+    #   if 'score_to_win' in config and last_mean_rewards > score_to_win:
+    #       print("Maximum reward achieved. Network won!"); should_exit = True
+    #   (rl_games/common/a2c_common.py:1123-1132)
+    # The old value 20000 came from the 15 s / 225-step era. The episode return scales
+    # with the budget because the completion bonus is paid every step the seat holds
+    # (40/step x up to 1350 steps), so at 90 s episodes a healthy return is already
+    # tens of thousands: the run stopped at epoch 11/100 having reached 31837.
+    # Removing the key disables the check entirely (the branch is guarded by
+    # `if 'score_to_win' in self.config`), so training always runs max_epochs.
     max_epochs: 100
     # Checkpoint policy: keep ONLY the highest-reward weights.
     #   save_frequency: 0    -> disables the periodic "last_<name>_ep_..._rew_..." dumps
