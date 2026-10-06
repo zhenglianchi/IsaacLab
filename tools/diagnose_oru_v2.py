@@ -172,6 +172,7 @@ try:
         writer = csv.writer(handle)
         writer.writerow(['step','env','ee_z','ee_x','ee_y','oru_z','oru_x','oru_y','xy_error','angle_rad','gap_to_seat_m',
                          'phase','alpha','contact_alpha','reference_z',
+                         'ee_xy_error','ee_angle_rad','ee_gap_to_seat_m',
                          'kp_z','command_fz','wrist_fx_world','wrist_fy_world','wrist_fz_world','stable_success',
                          'oru_spd_m_s','oru_angspd_rad_s','cand','succ_count',
                          'oru_wx','oru_wy','oru_wz','oru_qw','oru_qx','oru_qy','oru_qz',
@@ -203,14 +204,17 @@ try:
                           f"obs={[round(v, 5) for v in stage_obs.tolist()]} "
                           f"internal={[round(v, 5) for v in stage_expect.tolist()]}", flush=True)
             z_now = float(task.oru.data.root_pos_w[0, 2])
+            # The seat criterion is measured on the EE frame; log it alongside the
+            # ORU-based proxies so the report checks the criterion that actually runs.
+            ee_xy, ee_gap, ee_angle = task._ee_pose_errors()
             if z_now < min_oru_z:
                 min_oru_z, min_oru_step = z_now, step
             max_streak = max(max_streak, int(task._success_count[0].item()))
             # live readout: watch the seated height while the viewer runs
             if step % 50 == 0 or step == args.steps - 1:
                 print(f"[step {step:4d}] ee_z={float(task.ee_pos[0, 2]):.5f}  oru_z={z_now:.5f}  "
-                      f"oru-target={float(gap_dbg[0].item()) * 1000:+6.2f} mm  "
-                      f"tilt={float(angle_dbg[0].item()):.4f} rad  xy={float(xy[0].item()) * 1000:.2f} mm  "
+                      f"target: ee={float(ee_gap[0].item()) * 1000:+6.2f} / oru={float(gap_dbg[0].item()) * 1000:+6.2f} mm  "
+                      f"tilt(ee)={float(ee_angle[0].item()):.4f} rad  xy(ee)={float(ee_xy[0].item()) * 1000:.2f} mm  "
                       f"cand={int(cand_now[0].item())}  streak={int(task._success_count[0].item())}"
                       f"  phase={int(task._insertion_phase[0].item())}  contact={float(task._contact_alpha[0].item()):.2f}"
                       f"  Fcontact={float(task._get_contact_force_mag()[0].item()):.3f} N",
@@ -219,6 +223,7 @@ try:
                                 task.oru.data.root_pos_w[:, 2],
                                 task.oru.data.root_pos_w[:, 0], task.oru.data.root_pos_w[:, 1],
                                 xy, angle_dbg, gap_dbg,
+                                ee_xy, ee_angle, ee_gap,
                                 task._insertion_phase.float(), task._stage_alpha, task._contact_alpha, task._control_z,
                                 task.task_prop_gains[:, 2], task.applied_wrench[:, 2], force[:, 0], force[:, 1], force[:, 2],
                                 task._stable_success.float(),

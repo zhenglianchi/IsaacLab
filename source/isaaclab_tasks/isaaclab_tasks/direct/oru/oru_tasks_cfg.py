@@ -25,11 +25,11 @@ class OruTaskCfg:
     # This matches the Ground config pos + rot. The policy always targets
     # this same pose — domain randomization is on the START, not the GOAL.
     #
-    # Z = 0.4297: EE height when the ORU is fully docked.
-    # ORU seated Z = 0.03742 + chain offset -0.39230 → EE Z = 0.42972.
+    # EE pose when the ORU is fully docked: control target AND seat-criterion
+    # reference (the task geometry is read on the EE frame, see _ee_pose_errors).
     target_pos: tuple = (0.4, 0.0, 0.4298)
     target_quat: tuple = (0.0, 0.0, 1.0, 0.0)
-    # Success height (EE Z, world): ORU fully docked.
+    # Seat height (EE Z, world): the ORU is fully docked when the EE z reaches this.
     success_z: float = 0.4298
 
     # v2 pilot parameters, to be calibrated on validation runs before the suite.
@@ -55,7 +55,10 @@ class OruTaskCfg:
     joint_torque_limit: float = 100.0
     oru_seat_z: float = 0.03750  # = success_z 0.4298 - measured chain offset 0.39230
     # (2026-10-05: was the legacy 0.03742; re-derived from the EE success height the
-    #  penetration-calibrated run actually reaches, so the ORU criterion matches it.)
+    #  penetration-calibrated run actually reaches, so the ORU criterion matches it.
+    #  Since the task geometry moved to the EE frame this field only feeds the
+    #  ORU-based diagnostics / the geometric contact truth; the ORU-EE link is rigid
+    #  to 0.02 mm vertically, so it describes the same seat.)
     oru_seat_quat: tuple = (0.0, 1.0, 0.0, 0.0)
     seat_z_tolerance: float = 0.002
     seat_angle_tolerance: float = 0.035
@@ -83,11 +86,18 @@ class OruTaskCfg:
     fixed_ik_offset_pos: tuple | None = None
     fixed_ik_offset_rot: tuple | None = None
 
-    # ── Success thresholds ─────────────────────────────────────────
+    # ── Success thresholds (all measured on the EE frame) ─────────
+    # The ORU is rigidly bolted to the EE through the fixed-joint chain (measured:
+    # 0.02 mm vertically, 0.2-0.7 mm laterally at the seat), so the seat test is
+    # expressed on the EE pose - the pose the policy commands and the one used for
+    # the reference anchor. See oru_env._ee_pose_errors.
     # XY centering on docking surface
     xy_tolerance: float = 0.002       # 2 mm
     # Z height fraction of ground-surface height for success
-    success_threshold: float = 0.05   # 5 % of ground height
+    success_threshold: float = 0.05   # 5 % of ground height — UNUSED (legacy): it is
+                                      # passed to _get_curr_successes() but the body
+                                      # uses seat_z_tolerance / xy_tolerance /
+                                      # seat_angle_tolerance instead.
     engage_threshold: float = 0.90    # 90 % of ground height → engaged
     # Completion bonus (per step while success holds). Must dominate the
     # per-step income, or the policy parks near the target instead of

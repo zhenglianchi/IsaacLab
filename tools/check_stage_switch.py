@@ -77,7 +77,9 @@ def report(path):
                       "hint": "re-run tools/diagnose_oru_v2.py with the current code to regenerate it"}
     step = col(rows, "step").astype(int)
     oru_z = col(rows, "oru_z")
-    gap_mm = col(rows, "gap_to_seat_m") * 1000.0
+    # the seat criterion is EE-based (oru_env._ee_pose_errors); fall back for older CSVs
+    gap_col = "ee_gap_to_seat_m" if "ee_gap_to_seat_m" in rows[0] else "gap_to_seat_m"
+    gap_mm = col(rows, gap_col) * 1000.0
     fc = col(rows, "contact_force_N")
     fvec = np.stack([col(rows, "contact_fx"), col(rows, "contact_fy"), col(rows, "contact_fz")], axis=1)
     flag = col(rows, "contact_flag").astype(bool)
@@ -213,6 +215,7 @@ def report(path):
         "pre_contact_tax_note": "raw stage-2 reward that the blend does NOT pay before contact",
         "frozen_steps": int(frozen.sum()),
         "seat_gap_mm_mean": round(float(gap_mm[frozen].mean()), 2) if frozen.any() else None,
+        "seat_gap_source": gap_col,
         "frozen_speed_max_m_s": round(float(spd[frozen].max()), 4) if frozen.any() else None,
         "frozen_angspd_max_rad_s": round(float(angspd[frozen].max()), 4) if frozen.any() else None,
         "obs_mismatch_steps": meta.get("obs_stage_mismatch_steps"),
