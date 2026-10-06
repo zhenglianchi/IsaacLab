@@ -74,3 +74,21 @@
   `wrist_tau_peak_Nm`、`wrist_tauz_peak_Nm`），便于出总表；分量列用于看方向与符号。
 - **注意**：表头变了，旧的 `logs/oru_episode_metrics*.csv` 已删除 ✓，明天评估前必须重跑 C0 生成新表头。
 - 评估时两套口径都要报：**接触传感器**（1/120 s 子步，真实接触载荷）与**腕部六维**（15 Hz，含链条惯性；真机可比性以此为准）。
+
+---
+
+# 追加 3（用户指示：C0 / v14 / v15 全部重评）
+
+明天评估必须**三组都用新记录器（分量式表头）重跑一遍**，不能沿用旧数字：
+
+| 组 | 命令 | 检查点 / 方式 | 输出 |
+|---|---|---|---|
+| **C0** | `python tools/diagnose_oru_v2.py --num-envs 100 --steps 450 --seed 1234 --output .installation/c0_m3` | 零动作（`experiment_method=fixed`）| `logs/oru_episode_metrics_c0.csv` |
+| **v14** | `python scripts/reinforcement_learning/rl_games/play.py --task Isaac-Oru-Direct-v0 --num_envs 100 --headless --checkpoint logs/rl_games/OruAssembly/ours_v14_s0/nn/OruAssembly.pth env.task.experiment_method=full agent.params.config.player.deterministic=True` | 旧奖励下训练的最优副本（此前测得 95.0% / 中位 47.1 N，但那是**旧表头**，必须重测）| `logs/oru_episode_metrics_v14.csv` |
+| **v15** | 同上，`--checkpoint logs/rl_games/OruAssembly/ours_v15_s0/nn/last_OruAssembly_ep_60_rew__1599.6842_.pth` | 新尾部惩罚的末轮策略（训练日志成功率 0.984）| `logs/oru_episode_metrics_v15ep60.csv` |
+
+**关键操作细节**：
+- 每次 play.py 运行**前**把 `logs/oru_episode_metrics.csv` **改名或删除**（环境只在文件不存在时写表头，否则会沿用上一次的表头 ✗）；
+- 每次运行约 330 秒后停止（覆盖 1~2 个 450 步回合批次，约 100~200 个回合）；
+- 最后出**三行对比**：成功率、接触力各分量峰值、腕部力/力矩各分量峰值、翻转、姿态/角速度 RMS；
+  另附此前的汇总口径（接触力合力中位/P90/最大）。
