@@ -44,6 +44,9 @@ parser.add_argument('--hold-force', type=float, default=None,
                     help='override cfg.task.hold_force in N (default 3.0): the constant downward preload applied '
                          'once the ORU is geometrically seated and the feedback gains are frozen. Zeroing the '
                          'gains alone lets the ORU float up (nothing pulls the weightless chain down)')
+parser.add_argument('--seed', type=int, default=1234,
+                    help='env seed for the reset randomization; vary it to build an evaluation set '
+                         '(all envs share one seed, so use --num-envs to get many conditions per run)')
 parser.add_argument('--contact-force-threshold', type=float, default=None,
                     help='override cfg.task.contact_force_threshold in N (default 0.5) - for the switch '
                          'threshold sweep required by the stage-switch verification protocol')
@@ -69,7 +72,7 @@ try:
     from isaaclab_tasks.utils import parse_env_cfg
     from isaaclab.utils.math import quat_apply
     cfg = parse_env_cfg('Isaac-Oru-Direct-v0', device='cuda:0', num_envs=args.num_envs)
-    cfg.seed = 1234
+    cfg.seed = args.seed
     cfg.task.experiment_method = 'fixed'
     if args.ground_drop:
         gx, gy, gz = cfg.scene.Ground.init_state.pos
@@ -162,6 +165,9 @@ try:
     min_oru_step = -1
     max_streak = 0
     obs_mismatch = 0
+    # Per-env peak of the consecutive seat-criterion streak: >= 5 steps means stable
+    # success under the env's own rule, so this gives a success rate across envs.
+    streak_peak = torch.zeros(args.num_envs, device=task.device)
     seat = float(cfg.task.oru_seat_z)
     ee_seat = float(cfg.task.success_z)
     print(f"[INFO] targets: oru_seat_z={seat:.5f}  ee success_z={ee_seat:.5f}  "
@@ -210,6 +216,7 @@ try:
             if z_now < min_oru_z:
                 min_oru_z, min_oru_step = z_now, step
             max_streak = max(max_streak, int(task._success_count[0].item()))
+            streak_peak = torch.maximum(streak_peak, task._success_count.float())
             # live readout: watch the seated height while the viewer runs
             if step % 50 == 0 or step == args.steps - 1:
                 print(f"[step {step:4d}] ee_z={float(task.ee_pos[0, 2]):.5f}  oru_z={z_now:.5f}  "
@@ -262,12 +269,20 @@ try:
     print(f"  stable_success          : {bool(success.any().item())}  "
           f"(longest cand streak {max_streak} steps, needs {hold})", flush=True)
     print(f"  obs stage_state mismatch: {obs_mismatch} steps  (0 expected)", flush=True)
+    n_success = int((streak_peak >= 5).sum().item())
+    med = float(streak_peak[streak_peak >= 5].median().item()) if n_success else float("nan")
+    print(f"  success across envs      : {n_success}/{args.num_envs} "
+          f"({100.0 * n_success / max(args.num_envs, 1):.1f}%)   median peak streak among successes = {med:.1f} steps",
+          flush=True)
     print("===========================================", flush=True)
 
     summary = {'num_envs':args.num_envs, 'steps':args.steps, 'nominal':args.nominal, 'bias_m':args.bias,
                'penetration_m':args.penetration, 'oru_usd':args.oru_usd,
                'contact_force_threshold_N':float(cfg.task.contact_force_threshold),
                'fault_inject':args.fault_inject, 'obs_stage_mismatch_steps':obs_mismatch,
+               'seed':args.seed, 'success_envs':n_success,
+               'success_rate':n_success / max(args.num_envs, 1),
+               'streak_peak_per_env':[float(x) for x in streak_peak.cpu().tolist()],
                'oru_seat_target_m':seat, 'oru_lowest_m':min_oru_z, 'oru_final_m':final_oru,
                'gap_to_target_mm':(min_oru_z - seat) * 1000, 'ee_final_m':final_ee,
                'max_cand_streak_steps':max_streak,
