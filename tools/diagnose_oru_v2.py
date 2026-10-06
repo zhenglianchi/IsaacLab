@@ -86,6 +86,7 @@ try:
     cfg.seed = args.seed
     if args.rand_pos is not None:
         cfg.task.ik_rand_pos_noise = (args.rand_pos,) * 3
+        cfg.task.ik_rand_pos_bounds = None  # symmetric sweep overrides the per-axis bounds
         print(f'[INFO] ik_rand_pos_noise = +/-{args.rand_pos * 100:.1f} cm per axis', flush=True)
     if args.rand_rot is not None:
         cfg.task.ik_rand_rot_noise = (args.rand_rot,) * 3
@@ -202,6 +203,8 @@ try:
     n_reset_events = 0
     n_success_events = 0.0
     success_rate_samples = []
+    last_reset_step = torch.zeros(args.num_envs, dtype=torch.long, device=task.device)
+    ep_lengths = []  # steps between consecutive resets of the same env
     seat = float(cfg.task.oru_seat_z)
     ee_seat = float(cfg.task.success_z)
     print(f"[INFO] targets: oru_seat_z={seat:.5f}  ee success_z={ee_seat:.5f}  "
@@ -253,6 +256,11 @@ try:
             streak_peak = torch.maximum(streak_peak, task._success_count.float())
             reset_now = task.episode_length_buf <= 0
             if torch.any(reset_now):
+                for _e in torch.nonzero(reset_now, as_tuple=False).flatten().tolist():
+                    _iv = int(step) - int(last_reset_step[_e].item())
+                    if _iv > 20:
+                        ep_lengths.append(_iv)
+                    last_reset_step[_e] = int(step)
                 n_reset = int(reset_now.sum().item())
                 n_reset_events += n_reset
                 rate = float(task.extras.get('log', {}).get('episode_success_rate', float('nan')))
@@ -313,11 +321,15 @@ try:
     print(f"  obs stage_state mismatch: {obs_mismatch} steps  (0 expected)", flush=True)
     n_success = int((streak_peak >= 5).sum().item())
     ep_rate = (n_success_events / n_reset_events) if n_reset_events else float("nan")
-    mean_ep_len = (args.steps * args.num_envs / n_reset_events) if n_reset_events else float("nan")
+    import statistics as _st
+    mean_ep_len = (sum(ep_lengths) / len(ep_lengths)) if ep_lengths else float("nan")
+    med_ep_len = _st.median(ep_lengths) if ep_lengths else float("nan")
+    p95_ep_len = (sorted(ep_lengths)[int(0.95 * (len(ep_lengths) - 1))] if ep_lengths else float("nan"))
     print("  --- TRUE success accounting (episodes that ran to a decision) ---", flush=True)
     print(f"  episodes finished        : {n_reset_events}  (success {n_success_events:.0f})", flush=True)
     print(f"  SUCCESS RATE             : {100.0 * ep_rate:.1f}%   "
-          f"mean episode length = {mean_ep_len:.0f} steps ({mean_ep_len / 15.0:.1f} s)", flush=True)
+          f"episode length mean/median/P95 = {mean_ep_len:.0f}/{med_ep_len:.0f}/{p95_ep_len:.0f} steps "
+          f"({mean_ep_len / 15.0:.1f}/{med_ep_len / 15.0:.1f}/{p95_ep_len / 15.0:.1f} s)", flush=True)
     print(f"  [obsolete] peak streak   : {int(streak_peak.max().item())} steps "
           f"(always one less than required: the reset clears it)", flush=True)
     print("===========================================", flush=True)

@@ -84,6 +84,9 @@ class OruTaskCfg:
     success_hold_s: float = 0.3
     success_speed_tolerance: float = 0.01
     success_angular_speed_tolerance: float = 0.05  # rad/s
+    ik_max_step: float = 0.2  # rad per reset-IK iteration. With a fresh Jacobian a
+                              # 0.1 rad clamp was needlessly slow; 0.2 converges in
+                              # a few iterations while staying a damped step.
     ik_iterations: int = 60  # 2026-10-06: 10 -> 60. The reset DLS IK did not
                              # converge for large domain randomization (at +/-12 cm it
                              # returned a 0.285 m / 0.656 rad residual and raised); the
@@ -104,7 +107,16 @@ class OruTaskCfg:
     # validation). At the pilot range the fixed-gain baseline (C0) succeeds 100% of
     # episodes, i.e. the task is too easy to discriminate methods; the original range is
     # the one the task was designed around.
-    ik_rand_pos_noise: tuple = (0.12, 0.12, 0.12)      # +/-12 cm per axis (original design)
+    # 2026-10-06: Z is NOT randomized, and neither is the OUTBOUND x direction.
+    # Reach arithmetic: the UR5 radius is ~0.85 m and the home wrist height is 0.7388 m,
+    # so the reachable horizontal radius at that height is 0.420 m, while the base-to-slot
+    # distance is 0.400 m. Moving the start AWAY from the base therefore has only ~2 cm
+    # of margin (and +12 cm in Z is outright outside the workspace), which is why the
+    # reset IK could not converge for the original symmetric +/-12 cm box. Randomizing
+    # toward the base and tangentially keeps the whole range reachable.
+    # (ik_rand_pos_noise is the fallback symmetric box used when bounds are None.)
+    ik_rand_pos_noise: tuple = (0.12, 0.12, 0.0)
+    ik_rand_pos_bounds: tuple | None = ((-0.12, 0.0), (-0.12, 0.12), (0.0, 0.0))
     ik_rand_rot_noise: tuple = (0.0524, 0.0524, 0.0524)  # +/-3 deg per axis (original design)
 
     # ── Fixed IK offset for single-case evaluation ──────────────────

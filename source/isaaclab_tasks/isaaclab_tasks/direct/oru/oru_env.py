@@ -762,7 +762,15 @@ class OruEnv(DirectRLEnv):
             pos_noise = torch.tensor(task.fixed_ik_offset_pos, device=self.device).expand(n, -1)
             rot_noise = torch.tensor(task.fixed_ik_offset_rot or (0., 0., 0.), device=self.device).expand(n, -1)
         else:
-            pos_noise = (2 * torch.rand(n, 3, device=self.device) - 1) * torch.tensor(task.ik_rand_pos_noise, device=self.device)
+            bounds = getattr(task, "ik_rand_pos_bounds", None)
+            if bounds is not None:
+                # Per-axis ranges: the reachable set is asymmetric around the home pose, so a
+                # symmetric box cannot be realized (see the reach note in the task config).
+                lo = torch.tensor([b[0] for b in bounds], device=self.device)
+                hi = torch.tensor([b[1] for b in bounds], device=self.device)
+                pos_noise = lo + torch.rand(n, 3, device=self.device) * (hi - lo)
+            else:
+                pos_noise = (2 * torch.rand(n, 3, device=self.device) - 1) * torch.tensor(task.ik_rand_pos_noise, device=self.device)
             rot_noise = (2 * torch.rand(n, 3, device=self.device) - 1) * torch.tensor(task.ik_rand_rot_noise, device=self.device)
         target_pos = home[:, :3] + pos_noise
         dq = torch_utils.quat_from_euler_xyz(rot_noise[:, 0], rot_noise[:, 1], rot_noise[:, 2])
@@ -772,11 +780,18 @@ class OruEnv(DirectRLEnv):
         ik.set_command(torch.cat((target_pos, target_quat), dim=-1))
         limits = self.robot.data.soft_joint_pos_limits[env_ids]
         for _ in range(task.ik_iterations):
+            # Refresh ArticulationData BEFORE reading pose/Jacobian. sim.forward() alone does
+            # not refresh them, so the loop used to keep solving from the home pose: it
+            # converged to the same (wrong) joint target no matter the iteration count
+            # (measured: identical 0.28506 m residual at 20 and at 60 iterations), which is
+            # why any domain randomization beyond ~1-2 cm could not be realized.
+            self.robot.update(self.physics_dt)
             current = self.robot.data.body_pose_w[env_ids, self._ee_frame_idx]
             jac = self.robot.root_physx_view.get_jacobians()[env_ids, self._ee_frame_idx - 1][:, :, self._arm_joint_ids]
             old = joints[:, self._arm_joint_ids]
             solved = ik.compute(current[:, :3], current[:, 3:], jac, old)
-            joints[:, self._arm_joint_ids] = old + (solved - old).clamp(-0.1, 0.1)
+            _step = task.ik_max_step
+            joints[:, self._arm_joint_ids] = old + (solved - old).clamp(-_step, _step)
             joints = joints.clamp(limits[:, :, 0], limits[:, :, 1])
             self.robot.write_joint_state_to_sim(joints, zero_vel, env_ids=env_ids)
             self.sim.forward()
