@@ -11,3 +11,6 @@ outputs/
 
 # Local pip installation wheels and validation logs
 .installation/
+
+# Training logs (weights + tensorboard) stay out of the repo
+logs/
