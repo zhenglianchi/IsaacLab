@@ -135,7 +135,11 @@ class OruTaskCfg:
     #                fixed-setpoint impedance controller, no staging, no rate limit.
     # 'setpoint' is the intended C0 baseline: giving the target point in one step is
     # what excites the outward arc / the tool-axis clocking drift.
-    reference_mode: str = "ramp"
+    # 2026-10-06 (final choice): the C0 baseline uses a SINGLE TARGET POINT, so this is
+    # the default now. "ramp" is kept only as a comparison mode (the rate-limited anchor);
+    # note that in "setpoint" mode reference_speed / preinsert_height / can_advance no
+    # longer influence the reference (phase and in_corridor still gate the contact stage).
+    reference_mode: str = "setpoint"
     ik_rand_rot_noise: tuple = (0.0524, 0.0524, 0.0524)  # +/-3 deg per axis (original design)
 
     # ── Fixed IK offset for single-case evaluation ──────────────────
