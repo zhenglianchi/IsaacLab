@@ -663,6 +663,12 @@ class OruEnv(DirectRLEnv):
             self.extras["log"] = {"episode_success_rate": self.ep_succeeded[self.reset_buf].float().mean(), "mean_prop_gain": self.task_prop_gains.mean().item(), "mean_deriv_gain": self.task_deriv_gains.mean().item()}
         _rb = self.reset_buf.nonzero(as_tuple=False).flatten()
         if len(_rb) > 0:
+            # one-off tail penalty on this episode's PEAK force (see the task config)
+            if getattr(task, "force_peak_budget", -1.0) > 0:
+                _pen = torch.zeros_like(rew)
+                _pen[_rb] = task.force_peak_penalty * torch.clamp(
+                    self._ep_fmax[_rb] - task.force_peak_budget, min=0.0)
+                rew = rew - _pen
             with open(self._ep_metrics_path, 'a', encoding='utf-8') as _fh:
                 for _e in _rb.tolist():
                     _n = max(int(self._ep_steps[_e].item()), 1)

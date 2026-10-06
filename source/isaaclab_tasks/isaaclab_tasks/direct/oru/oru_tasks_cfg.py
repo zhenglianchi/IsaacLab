@@ -230,6 +230,13 @@ class OruTaskCfg:
                                                # max_task_force_z so the required
                                                # >50N insertion force is not taxed
     force_peak_weight: float = 0.01            # squared penalty above limit
+    # 2026-10-06 (user goal): cap the WORST-CASE insertion force, not the median.
+    # Charged ONCE per episode on the episode's peak force, so a rare 200 N spike costs
+    # ~3000 (comparable to the completion bonus) while a typical 47 N costs ~140; this
+    # attacks the tail without taxing the whole insertion (which would push the policy
+    # back into avoiding contact). Set budget to -1 to disable.
+    force_peak_budget: float = 40.0   # N, allowed episode peak before penalty
+    force_peak_penalty: float = 20.0  # reward units per N above the budget
     lateral_force_weight: float = 0.1          # XY force penalty (anti-rubbing)
     z_force_target: float = -2.0               # world -Z is downward
     z_force_weight: float = 0.0                # disable uncalibrated commanded-force target
