@@ -304,4 +304,4 @@ class OruTaskCfg:
     # Action[:6]  → Kp = base_Kp * (1 + a * gain_range)
     # Action[6:]  → Kd = base_Kd * (1 + a * gain_range)
     # Clamped to [5%, 500%] of base.
-    gain_range: float = 4.0
+    gain_range: float = 2.0
