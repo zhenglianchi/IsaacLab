@@ -128,7 +128,14 @@ class OruTaskCfg:
     # Constant vertical bias added to the reset start pose (0.0 = the home height).
     # Used for the start-height sensitivity study; it shifts every episode equally and
     # does NOT replace the lateral randomization, which stays active on top of it.
-    start_z_offset: float = 0.0
+    # 2026-10-07 (user decision B): hard regime. The EE now starts only 12 cm above the
+    # target (0.4298 + 0.12 = 0.5498 m) instead of 0.7388 m. Measured C0 baseline in this
+    # regime (100 envs / 450 steps / seed 1234): success 76.0%, wrist |F| max 83.95 N
+    # (exceeds the 40 N criterion), contact force 68.3 / 145.0 / 572.8 N - i.e. the fixed
+    # approach can no longer correct the attitude in time (tilt 0.051 -> 0.253 rad within
+    # 50 steps), so the approach segment becomes the bottleneck and the two-stage policy
+    # has a regime where it can add real value.
+    start_z_offset: float = -0.189
     # Reference for the Z channel:
     #   'ramp'     = rate-limited virtual anchor (pre-insert point, then 2 cm/s down).
     #   'setpoint' = the reference IS the seat pose from the start: a classic
@@ -283,7 +290,7 @@ class OruTaskCfg:
     # ~100 m/s² and the path overshoots. Z is raised to max_task_force_z
     # by oru_env once contact is detected (stage 2).
     max_task_force: float = 8.0
-    max_task_force_z: float = 60.0   # stage-2 Z cap: the last cm of seating
+    max_task_force_z: float = 40.0   # stage-2 Z cap: the last cm of seating
                                      # needs >50N down-force
     max_task_torque: float = 6.0     # Nm, per rotational axis
 
