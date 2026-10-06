@@ -179,6 +179,7 @@ python tools/run_oru_experiment.py --method all --seeds 0 1 2 --epochs 100 --num
 ### 训练脚本相关的固定约定
 
 - 64 环境；**100 epoch**（2026-10-05 由 200 下调）；horizon128；minibatch512；mini_epochs4；每次训练用唯一目录名。
+- **奖励整体缩放 `reward_shaper.scale_value: 0.01`**：rl_games 按 `reward*scale_value` 做均匀仿射变换（`tr_helpers.py:33-42`，shift 为 0），只改量级、不改各项相对关系与最优策略；PPO 侧 `normalize_advantage` 与 `normalize_value` 均已开启，因此这是可读性与量级的修正，而非改变学习问题。未缩放时回合回报为 O(3e4)，原因是完成奖励按步发放（40/步）而回合最长 1350 步，任何较早的成功都会累积到数万。**不要只单独调小完成奖励**：阶段一的对齐奖励约 2/步是持续收益，在 γ=0.995 下「停在接触前且保持对齐」的折现价值约 2/(1−0.995)=400，完成奖励必须与之可比，否则策略会停在接触前。
 - **配置里不得出现 `score_to_win`**：rl_games 把它当提前退出阈值（`a2c_common.py:1123-1132`：超过即打印
   `Maximum reward achieved. Network won!` 并 `should_exit`）。该键留存的是 15 秒回合时代的 20000，
   而回合回报随预算线性放大（成功奖励 40/步 × 最多 1350 步），90 秒回合下健康回报已达数万——

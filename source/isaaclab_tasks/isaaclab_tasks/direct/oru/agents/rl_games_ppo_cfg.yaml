@@ -61,8 +61,20 @@ params:
     normalize_value: True
     value_bootstrap: True
     num_actors: 64
+    # Global reward scale. rl_games applies this as a uniform affine map
+    # (reward = reward * scale_value + shift_value, see rl_games/common/tr_helpers.py:33-42),
+    # so with shift 0 it only changes the MAGNITUDE, never the relative ordering of
+    # the reward terms. 0.01 is applied because the undiscounted episode return was
+    # O(3e4): the completion bonus is paid every step the seat holds (40/step) over
+    # an episode of up to 1350 steps, so any early success yields tens of thousands.
+    # PPO is scale-robust here (normalize_advantage/normalize_value are on), so this
+    # is a readability + sanity change, not a change of the learning problem.
+    # NOTE: do NOT reduce only the success bonus without re-balancing the sustained
+    # stage-1 income (alignment pays ~2/step): in discounted terms with gamma 0.995
+    # a parked-but-aligned policy is worth ~2/(1-0.995)=400, so the completion
+    # stream must stay comparable or the policy parks before contact.
     reward_shaper:
-      scale_value: 1.0
+      scale_value: 0.01
     normalize_advantage: True
     gamma: 0.995
     tau: 0.95
