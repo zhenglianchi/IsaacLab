@@ -181,3 +181,39 @@
   → **第一阶段定位为"固定接近"** ✓，**学习集中在接触段** ✓（失败全部是"已接触但未坐实"：姿态 RMS 0.26 rad、翻转 100~175）。
 - 论文口径（已定）：力 = 接触传感器（子步，报中位/P90/最大）；**最坏力判据 = 腕部力传感器 |F| 最大 ≤40 N（口径 C）**。
   实测：C0 **34.55 N** ✓、v14 **37.95 N** ✓ —— **两者均达标** ✓；接触传感器最大 533.5 N 属子步数值现象，须如实并列说明。
+
+---
+
+# 追加 8（2026-10-07 夜：改为睡觉期间训练）
+
+## 用户决定
+- **暂不训练**，改在**睡觉期间**跑训练 ✓。
+- 训练配置**已经就绪并提交** ✓：起始 EE = 目标 + 12 cm（`start_z_offset = -0.189` ✓）、`action_space = 12` ✓、`switch_mode = contact` ✓、`oru_env.py` = `2fbe57c` + 腕部 |F|/F_z 两列 ✓、奖励含尾部力惩罚（`force_peak_budget=40 N`、`force_peak_penalty=20`）✓。
+
+## 睡前一条命令即可（headless 训练 60 epoch）
+```powershell
+cd C:\Users\zhenglianchi\Desktop\IsaacLab
+python scripts\reinforcement_learning\rl_games\train.py --task Isaac-Oru-Direct-v0 --num_envs 64 --headless --seed 0 --max_iterations 60 env.task.experiment_method=full agent.params.config.full_experiment_name=ours_v18_z12_s0
+```
+（建议把控制台输出重定向留档：`*> logs\train_v18.log`）
+
+## 早上要看的两个量
+1. `Episode/episode_success_rate`（TensorBoard / 训练日志）：应从 ~0.6 爬升，目标 ≥0.90；
+2. `rewards/iter`：应上升（尾部惩罚在缩小的信号）。
+
+## 早上评估（提速：轮询到 100 行即停，约 3.5 分钟）
+```powershell
+python scripts\reinforcement_learning\rl_games\play.py --task Isaac-Oru-Direct-v0 --num_envs 100 --headless `
+  --checkpoint logs\rl_games\OruAssembly\ours_v18_z12_s0\nn\OruAssembly.pth `
+  env.task.experiment_method=full agent.params.config.player.deterministic=True
+```
+评估结束后把 `logs\oru_episode_metrics.csv` 改名为 `logs\metrics_v18_wrist.csv`，再与基线对比。
+
+## 基线（同区间，已实测并保存）
+- **C0 @ 起点=目标+12cm**：成功率 **76.0%**、接触力 中位 68.3 / P90 145.0 / 最大 572.8 N、翻转中位 56、
+  **[口径C] 腕部 |F| 最大 83.95 N（超 40 N ✗）** → 文件 `logs\metrics_c0_z12.csv`。
+- C0 @ 原起点（31cm 落差）：成功率 91.0%、接触力 83.9/177.4/450.9 N、翻转 57、腕部 |F| 最大 34.55 N → `logs\metrics_c0_wrist.csv`。
+- v14 @ 原起点：成功率 **95.0%**、接触力中位 **47.1 N**、翻转 **41**、腕部 |F| 最大 **37.95 N** ✓ → `logs\metrics_v14_wrist.csv`。
+
+## 论文主张（B 方案成立时）
+> 在固定接近方式失效的近距起点区间（C0：成功率 76%、最坏腕部力 84 N），本方法通过学习变阻抗把成功率恢复到 ≥90% 并把最坏力压回 ≤40 N。
