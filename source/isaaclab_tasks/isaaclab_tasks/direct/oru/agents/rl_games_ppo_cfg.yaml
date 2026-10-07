@@ -24,10 +24,9 @@ params:
         sigma_activation: None
         mu_init:
           name: default
-        sigma_init:
-          name: const_initializer
+        sigma_init: 0.25
           val: 0
-        fixed_sigma: False
+        fixed_sigma: True
     mlp:
       units: [512, 128, 64]
       activation: elu
@@ -84,7 +83,7 @@ params:
     # tens of thousands: the run stopped at epoch 11/100 having reached 31837.
     # Removing the key disables the check entirely (the branch is guarded by
     # `if 'score_to_win' in self.config`), so training always runs max_epochs.
-    max_epochs: 60
+    max_epochs: 100
     # Checkpoint policy: keep ONLY the highest-reward weights.
     #   save_frequency: 10    -> disables the periodic "last_<name>_ep_..._rew_..." dumps
     #                           (rl_games a2c_common.py: `if self.save_freq > 0`)
@@ -102,7 +101,7 @@ params:
     entropy_coef: 0.0
     truncate_grads: True
     e_clip: 0.2
-    horizon_length: 128
+    horizon_length: 256
     minibatch_size: 512
     mini_epochs: 4
     critic_coef: 2
