@@ -124,7 +124,7 @@ class OruTaskCfg:
     # toward the base and tangentially keeps the whole range reachable.
     # (ik_rand_pos_noise is the fallback symmetric box used when bounds are None.)
     ik_rand_pos_noise: tuple = (0.12, 0.12, 0.0)
-    ik_rand_pos_bounds: tuple | None = ((-0.12, 0.0), (-0.12, 0.12), (0.0, 0.0))
+    ik_rand_pos_bounds: tuple | None = ((-0.12, 0.0), (-0.12, 0.12), (-0.12, 0.0))
     # Constant vertical bias added to the reset start pose (0.0 = the home height).
     # Used for the start-height sensitivity study; it shifts every episode equally and
     # does NOT replace the lateral randomization, which stays active on top of it.
@@ -135,7 +135,7 @@ class OruTaskCfg:
     # approach can no longer correct the attitude in time (tilt 0.051 -> 0.253 rad within
     # 50 steps), so the approach segment becomes the bottleneck and the two-stage policy
     # has a regime where it can add real value.
-    start_z_offset: float = -0.189
+    start_z_offset: float = -0.109
     # Reference for the Z channel:
     #   'ramp'     = rate-limited virtual anchor (pre-insert point, then 2 cm/s down).
     #   'setpoint' = the reference IS the seat pose from the start: a classic
