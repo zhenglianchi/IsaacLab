@@ -24,9 +24,9 @@ params:
         sigma_activation: None
         mu_init:
           name: default
-        sigma_init: 0.25
           val: 0
         fixed_sigma: True
+        sigma_init: 0.25
     mlp:
       units: [512, 128, 64]
       activation: elu
