@@ -189,7 +189,10 @@ class OruTaskCfg:
     # slow, the part never arrived within the budget and the success rate collapsed to 0.
     # These two penalties remove that optimum: a per-step cost while the part sits inside
     # the seat band without having succeeded, and a one-off cost on a timeout.
-    hover_penalty: float = 2.0
+    # 2026-10-07 (user): DISABLED. The potential-difference shaping of the stage-1 state
+    # terms already makes standing still / hovering contribute ~0, so a separate
+    # in-band hover penalty is redundant. Kept as a field for reference / ablations.
+    hover_penalty: float = 0.0
     # 2026-10-07 (user): no reward for hovering - only progress pays. Charged every
     # control step while the best insertion depth has not improved for
     # stall_patience_steps steps, in BOTH stages (the old hover penalty only covered
