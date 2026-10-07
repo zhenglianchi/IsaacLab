@@ -324,7 +324,7 @@ class OruTaskCfg:
     # Action[:6]  → Kp = base_Kp * (1 + a * gain_range)
     # Action[6:]  → Kd = base_Kd * (1 + a * gain_range)
     # Clamped to [5%, 500%] of base.
-    gain_range: float = 2.0
+    gain_range: float = 0.5
     # 2026-10-06 (routes B/D): let the policy LEARN the soft switch instead of the
     # hand-designed contact trigger. With "learned" the 13th action is mapped to
     # alpha in [0,1] and drives BOTH the reward blend and the Z force cap, so "when to
