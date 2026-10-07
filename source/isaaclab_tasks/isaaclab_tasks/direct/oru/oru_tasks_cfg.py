@@ -128,13 +128,6 @@ class OruTaskCfg:
     # Constant vertical bias added to the reset start pose (0.0 = the home height).
     # Used for the start-height sensitivity study; it shifts every episode equally and
     # does NOT replace the lateral randomization, which stays active on top of it.
-    # 2026-10-07 (user decision B): hard regime. The EE now starts only 12 cm above the
-    # target (0.4298 + 0.12 = 0.5498 m) instead of 0.7388 m. Measured C0 baseline in this
-    # regime (100 envs / 450 steps / seed 1234): success 76.0%, wrist |F| max 83.95 N
-    # (exceeds the 40 N criterion), contact force 68.3 / 145.0 / 572.8 N - i.e. the fixed
-    # approach can no longer correct the attitude in time (tilt 0.051 -> 0.253 rad within
-    # 50 steps), so the approach segment becomes the bottleneck and the two-stage policy
-    # has a regime where it can add real value.
     start_z_offset: float = -0.109
     # Reference for the Z channel:
     #   'ramp'     = rate-limited virtual anchor (pre-insert point, then 2 cm/s down).
@@ -189,15 +182,22 @@ class OruTaskCfg:
     # episode terminates on that step, see oru_env._get_dones). It must dominate the
     # present value of parking with a good alignment score: w_align / (1 - gamma) =
     # 2 / 0.005 = 400. A small terminal bonus makes "park before contact" optimal.
-    success_bonus: float = 3000.0
+    success_bonus: float = 10000.0
     # 2026-10-06 (training diagnosis): the epilogue shaping (alignment / progress) could be
     # farmed by parking near the seat without completing - present value of the shaping
     # outweighed the one-off completion bonus, so the policy learned to stay compliant and
     # slow, the part never arrived within the budget and the success rate collapsed to 0.
     # These two penalties remove that optimum: a per-step cost while the part sits inside
     # the seat band without having succeeded, and a one-off cost on a timeout.
-    hover_penalty: float = 1.0     # reward units per step while in band and not succeeded
-    timeout_penalty: float = 500.0  # one-off, on resetting without having succeeded
+    hover_penalty: float = 2.0
+    # 2026-10-07 (user): no reward for hovering - only progress pays. Charged every
+    # control step while the best insertion depth has not improved for
+    # stall_patience_steps steps, in BOTH stages (the old hover penalty only covered
+    # the 1 cm band, so a policy could hover 1-2 cm above the seat for free - that was
+    # the 'safe plateau' (measured reward ~566/episode at 0% success).
+    stall_penalty: float = 2.0
+    stall_patience_steps: int = 15     # reward units per step while in band and not succeeded
+    timeout_penalty: float = 3000.0  # one-off, on resetting without having succeeded
     # LEGACY, no longer read: the per-step hold bonus used before the episode was
     # terminated on success. Kept only so old config dumps still load.
     success_reward: float = 0.0
@@ -244,6 +244,9 @@ class OruTaskCfg:
     # back into avoiding contact). Set budget to -1 to disable.
     force_peak_budget: float = 40.0   # N, allowed episode peak before penalty
     force_peak_penalty: float = 20.0  # reward units per N above the budget
+    # Keep the force suppressed but secondary to succeeding: the cap is ~25% of the
+    # 10000 success bonus, so a spike is costly yet never outweighs completing.
+    force_peak_penalty_cap: float = 600.0
     lateral_force_weight: float = 0.1          # XY force penalty (anti-rubbing)
     z_force_target: float = -2.0               # world -Z is downward
     z_force_weight: float = 0.0                # disable uncalibrated commanded-force target
@@ -290,7 +293,7 @@ class OruTaskCfg:
     # ~100 m/s² and the path overshoots. Z is raised to max_task_force_z
     # by oru_env once contact is detected (stage 2).
     max_task_force: float = 8.0
-    max_task_force_z: float = 40.0   # stage-2 Z cap: the last cm of seating
+    max_task_force_z: float = 60.0   # stage-2 Z cap: the last cm of seating
                                      # needs >50N down-force
     max_task_torque: float = 6.0     # Nm, per rotational axis
 
@@ -325,4 +328,4 @@ class OruTaskCfg:
     # become compliant" is output by the policy. "contact" keeps the contact-force
     # trigger, which is the ablation baseline (and the only one that needs the contact
     # sensor, which does not exist on the real robot).
-    switch_mode: str = "contact"
+    switch_mode: str = "learned"

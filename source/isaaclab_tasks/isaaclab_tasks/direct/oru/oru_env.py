@@ -159,6 +159,10 @@ class OruEnv(DirectRLEnv):
         self._oru_angspd = torch.zeros(N, device=self.device)
         self._oru_prev_pos = None
         self._oru_prev_quat = None
+        # Potential-difference shaping state (see _get_path_reward).
+        self._prev_phi = None
+        self._stall_steps = torch.zeros(N, device=self.device)
+        self._best_gap_seen = torch.full((N,), float('inf'), device=self.device)
         # Per-episode metrics -> logs/oru_episode_metrics.csv, same quantities as the C0
         # analysis (contact threshold and finite-difference angular speed), so the fixed-gain
         # baseline and a trained checkpoint are comparable.
@@ -170,14 +174,12 @@ class OruEnv(DirectRLEnv):
         self._ep_tau = torch.zeros(N, device=self.device)
         self._ep_fxy = torch.zeros(N, device=self.device)
         self._ep_tauz = torch.zeros(N, device=self.device)
-        self._ep_fw = torch.zeros(N, device=self.device)
-        self._ep_fwz = torch.zeros(N, device=self.device)
         self._ep_touch = torch.zeros(N, dtype=torch.bool, device=self.device)
         self._ep_metrics_path = 'logs/oru_episode_metrics.csv'
         _mp = pathlib.Path(self._ep_metrics_path)
         _mp.parent.mkdir(parents=True, exist_ok=True)
         if not _mp.exists():
-            _mp.write_text('step,env,success,steps,force_peak_N,contact_flips,attitude_rms_rad,angspd_rms_rad_s,wrist_tau_peak_Nm,wrist_fxy_peak_N,wrist_tauz_peak_Nm,wrist_f_peak_N,wrist_fz_peak_N\n', encoding='utf-8')
+            _mp.write_text('step,env,success,steps,force_peak_N,contact_flips,attitude_rms_rad,angspd_rms_rad_s,wrist_tau_peak_Nm,wrist_fxy_peak_N,wrist_tauz_peak_Nm\n', encoding='utf-8')
         # Geometry-only seat latch (no velocity gate). Drives the controller freeze:
         # freezing on the full seat test is circular, because the bounce that the
         # control force causes is exactly what keeps the velocity gates unsatisfied.
@@ -284,6 +286,14 @@ class OruEnv(DirectRLEnv):
         scale_kp = torch.clamp(scale_kp, min=0.05, max=5.0)
         scale_kd = 1.0 + self.actions[:, 6:12] * self.gain_range
         scale_kd = torch.clamp(scale_kd, min=0.05, max=5.0)
+        # Learned soft switch (user decision 2026-10-06): the extra action dim drives
+        # alpha, so the policy decides WHEN to become compliant instead of the env's
+        # contact threshold. Rate-limited to switch_duration_s at policy rate.
+        if getattr(self.cfg.task, "switch_mode", "contact") == "learned":
+            _a = (0.5 * (self.actions[:, 12] + 1.0)).clamp(0.0, 1.0)
+            _dl = min(1.0, self.physics_dt / max(self.cfg.task.switch_duration_s, 1e-3))
+            self._stage_alpha = self._stage_alpha + (_a - self._stage_alpha).clamp(-_dl, _dl)
+            self._contact_alpha = self._stage_alpha
 
         self.task_prop_gains = self.base_gains * scale_kp
         self.task_deriv_gains = self.base_deriv * scale_kd
@@ -402,9 +412,11 @@ class OruEnv(DirectRLEnv):
             "applied_wrench": self.applied_wrench,
             # TRUE wrist reaction force — applied_wrench is the commanded PD
             # output, not a contact signal.
-            "measured_force": self.robot.data.body_incoming_joint_wrench_b[
-                :, self._ee_frame_idx, :3
-            ],
+            # 2026-10-06 (user decision): the policy sees the ORU<->ground CONTACT force,
+            # used as the proxy for the real robot's wrist force/torque sensor. The wrist
+            # reaction it replaces mixes in chain inertia (3.9-5.9 N free space vs 2-10 N
+            # seated), so it cannot support learning WHEN to switch.
+            "measured_force": self._get_contact_force_vec(),
             "stage_state": torch.stack(
                 (self._insertion_phase.float(), self._stage_alpha, self._contact_alpha,
                  self._control_z - self.fixed_target_z, self._best_insertion_gap), dim=-1
@@ -513,8 +525,6 @@ class OruEnv(DirectRLEnv):
         self._ep_tau = torch.maximum(self._ep_tau, torch.linalg.vector_norm(_wb[:, 3:], dim=-1))
         self._ep_fxy = torch.maximum(self._ep_fxy, torch.linalg.vector_norm(_fw[:, :2], dim=-1))
         self._ep_tauz = torch.maximum(self._ep_tauz, _tw[:, 2].abs())
-        self._ep_fw = torch.maximum(self._ep_fw, torch.linalg.vector_norm(_fw, dim=-1))
-        self._ep_fwz = torch.maximum(self._ep_fwz, _fw[:, 2].abs())
         (self._insertion_phase, self._entry_count, self._was_in_contact,
          self._contact_count, self._stage_alpha, self._contact_alpha,
          self._can_advance) = oru_logic.update_phase(
@@ -581,7 +591,18 @@ class OruEnv(DirectRLEnv):
         if task.experiment_method in {"no_path", "single"}:
             r_progress = torch.zeros_like(r_progress)
             r_deviation = torch.zeros_like(r_deviation)
-        return r_progress + r_deviation + r_target + r_approach
+        # 2026-10-07 (user): the state terms (corridor progress + terminal target) are
+        # potentials Phi(s). Paying the LEVEL every step let a policy collect a
+        # positive stream forever by simply standing still at a good pose (measured:
+        # ~566 reward per episode at 0% success after the late-training collapse).
+        # Paying gamma*Phi(s') - Phi(s) instead is policy invariant (Ng et al. 1999),
+        # keeps the same task, and gives ZERO for standing still.
+        phi = r_progress + r_target
+        if self._prev_phi is None:
+            self._prev_phi = phi.detach().clone()
+        r_potential = phi - self._prev_phi
+        self._prev_phi = phi.detach().clone()
+        return r_potential + r_deviation + r_approach
 
     def _get_insertion_reward(self, target_ref_pos: torch.Tensor) -> torch.Tensor:
         """Actual depth progress, residual pose cost, and contact compliance."""
@@ -692,20 +713,19 @@ class OruEnv(DirectRLEnv):
                         round((float(self._ep_angspd2[_e].item()) / _n) ** 0.5, 5),
                         round(float(self._ep_tau[_e].item()), 4),
                         round(float(self._ep_fxy[_e].item()), 3),
-                        round(float(self._ep_tauz[_e].item()), 4),
-                        round(float(self._ep_fw[_e].item()), 3),
-                        round(float(self._ep_fwz[_e].item()), 3))) + '\n')
+                        round(float(self._ep_tauz[_e].item()), 4))) + '\n')
             self._ep_fmax[_rb] = 0.0
             self._ep_flips[_rb] = 0.0
             self._ep_ang2[_rb] = 0.0
             self._ep_angspd2[_rb] = 0.0
             self._ep_steps[_rb] = 0.0
             self._ep_touch[_rb] = False
+            self._prev_phi = None
+            self._stall_steps[_rb] = 0.0
+            self._best_gap_seen[_rb] = float('inf')
             self._ep_tau[_rb] = 0.0
             self._ep_fxy[_rb] = 0.0
             self._ep_tauz[_rb] = 0.0
-            self._ep_fw[_rb] = 0.0
-            self._ep_fwz[_rb] = 0.0
         self.extras["rew_pos_error"] = torch.norm(self.ee_pos - target_ref_pos, dim=-1).mean()
         self.extras["rew_contact_degree"] = contact_degree.mean()
         # Global scale applied here (not in rl_games' reward_shaper) so that the reward
@@ -719,6 +739,16 @@ class OruEnv(DirectRLEnv):
         _timeout = ((self.episode_length_buf >= self.max_episode_length - 1)
                     & ~self.ep_succeeded).float()
         rew = rew - task.hover_penalty * _hover - task.timeout_penalty * _timeout
+        # 2026-10-07 (user): no progress -> no reward. Track how long the best insertion
+        # depth has failed to improve and charge the stall penalty every step, in both
+        # stages, so hovering anywhere (not only inside the 1 cm band) pays nothing.
+        _gap_now = self._oru_pose_errors()[1]
+        _improved = _gap_now < (self._best_gap_seen - 1e-5)
+        self._best_gap_seen = torch.where(_improved, _gap_now.detach(), self._best_gap_seen)
+        self._stall_steps = torch.where(_improved, torch.zeros_like(self._stall_steps),
+                                        self._stall_steps + 1.0)
+        _stalled = (self._stall_steps >= task.stall_patience_steps).float()
+        rew = rew - task.stall_penalty * _stalled
         return rew * task.reward_scale
 
     def _ee_pose_errors(self):
