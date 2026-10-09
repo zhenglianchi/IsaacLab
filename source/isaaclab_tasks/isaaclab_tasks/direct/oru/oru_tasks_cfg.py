@@ -245,11 +245,11 @@ class OruTaskCfg:
     # ~3000 (comparable to the completion bonus) while a typical 47 N costs ~140; this
     # attacks the tail without taxing the whole insertion (which would push the policy
     # back into avoiding contact). Set budget to -1 to disable.
-    force_peak_budget: float = 40.0   # N, allowed episode peak before penalty
+    force_peak_budget: float = 25.0   # N, allowed episode peak before penalty
     force_peak_penalty: float = 20.0  # reward units per N above the budget
     # Keep the force suppressed but secondary to succeeding: the cap is ~25% of the
     # 10000 success bonus, so a spike is costly yet never outweighs completing.
-    force_peak_penalty_cap: float = 600.0
+    force_peak_penalty_cap: float = 1200.0
     lateral_force_weight: float = 0.1          # XY force penalty (anti-rubbing)
     z_force_target: float = -2.0               # world -Z is downward
     z_force_weight: float = 0.0                # disable uncalibrated commanded-force target
