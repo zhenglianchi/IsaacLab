@@ -228,6 +228,17 @@ class OruSceneCfg(InteractiveSceneCfg):
     Gripper: RigidObjectCfg = GRIPPER_CFG.replace(prim_path="{ENV_REGEX_NS}/Gripper")
     ORU: RigidObjectCfg = ORU_CFG.replace(prim_path="{ENV_REGEX_NS}/ORU")
     Ground: RigidObjectCfg = GROUND_CFG.replace(prim_path="{ENV_REGEX_NS}/Ground")
+    # 2026-10-13 (user): base plate, visual only. Collisions are disabled on purpose so the
+    # plate cannot disturb the assembly task; set collision_enabled=True to make it physical.
+    Zongzhuang: AssetBaseCfg = AssetBaseCfg(
+        prim_path="{ENV_REGEX_NS}/Zongzhuang",
+        spawn=sim_utils.UsdFileCfg(
+            usd_path="assets/USD/zongzhuang/zongzhuang.usd",
+            # 2026-10-13 (user): permeable visual only - no rigid body, collisions off
+            collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=False),
+        ),
+        init_state=AssetBaseCfg.InitialStateCfg(pos=(0.316, 0.0, 0.043), rot=(1.0, 0.0, 0.0, 0.0)),
+    )
     # True ORU<->Ground contact force (PhysX contact reports filtered to that pair).
     # Needed because the wrist reaction cannot serve as a contact signal here:
     # free-space chain inertia reads 3.9-5.9 N (8-12x the 0.5 N threshold) and at

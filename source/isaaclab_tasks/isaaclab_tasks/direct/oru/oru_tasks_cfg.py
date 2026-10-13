@@ -332,3 +332,8 @@ class OruTaskCfg:
     # trigger, which is the ablation baseline (and the only one that needs the contact
     # sensor, which does not exist on the real robot).
     switch_mode: str = "learned"
+    # 2026-10-13: demo/baseline mode. When True the policy output is replaced by zeros,
+    # which reproduces the fixed-impedance baseline C0 in exactly the same scene.
+    force_zero_action: bool = False
+    # 2026-10-13: optional per-step CSV trace (B2 mechanism figures). Empty = off.
+    trace_csv: str = ""

@@ -251,6 +251,8 @@ class OruEnv(DirectRLEnv):
     # ==================================================================
 
     def _pre_physics_step(self, actions: torch.Tensor):
+        if getattr(self.cfg.task, "force_zero_action", False):
+            actions = torch.zeros_like(actions)   # C0 baseline: zero action
         # Reset exactly once in _reset_idx, preserving the initial distance baseline.
         actions = actions.clamp(-1.0, 1.0)
         if self.cfg.task.experiment_method == "fixed":
@@ -649,6 +651,34 @@ class OruEnv(DirectRLEnv):
         )
 
     def _get_rewards(self) -> torch.Tensor:
+        # ---- B2 tracer (flag gated, default off) -------------------------------------
+        if getattr(self.cfg.task, "trace_csv", ""):
+            try:
+                import csv as _csv, os as _os
+                _f = self._trace_fh if hasattr(self, "_trace_fh") else None
+                if _f is None:
+                    _new = not _os.path.exists(self.cfg.task.trace_csv)
+                    _f = open(self.cfg.task.trace_csv, "a", newline="")
+                    if _new:
+                        _f.write("env,step,gap_m,xy_m,alpha,wrist_f_N,wrist_tau_Nm,force_cap_N" +
+                                 "".join([",gain%d" % i for i in range(12)]) + "\n")
+                    self._trace_fh = _f
+                if not hasattr(self, "_trace_step"):
+                    self._trace_step = 0
+                self._trace_step += 1
+                _w = self.robot.data.body_incoming_joint_wrench_b[:, self._ee_frame_idx]
+                _gap = float(self._oru_pose_errors()[1].mean().item())
+                _xy = float(self._oru_pose_errors()[0].mean().item())
+                _a = float(self._stage_alpha.mean().item())
+                _wr = _w[:, 0:3].norm(dim=-1)
+                _wt = _w[:, 3:6].norm(dim=-1)
+                _g = self.actions[:, 0:12].mean(dim=0).detach().cpu().tolist()
+                _f.write("%d,%d,%.6f,%.6f,%.6f,%.4f,%.4f,%.4f,%s\n" % (
+                    0, self._trace_step, _gap, _xy, _a, float(_wr.mean()), float(_wt.mean()),
+                    8.0 + 52.0 * _a, ",".join("%.5f" % v for v in _g)))
+                _f.flush()
+            except Exception:
+                pass
         self._compute_intermediate_values(self.physics_dt)
 
         target_ref_pos, _ = self._get_target_ref()
