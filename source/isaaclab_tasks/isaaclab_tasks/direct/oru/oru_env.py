@@ -285,17 +285,21 @@ class OruEnv(DirectRLEnv):
         self.ee_linvel = self.ee_twist[:, :3]
         self.ee_angvel = self.ee_twist[:, 3:6]
 
+        _mv = getattr(self.cfg.task, "method_variant", "ours")
         # ── Actions: [:6]=Kp scale, [6:]=Kd scale ──
         scale_kp = 1.0 + self.actions[:, 0:6] * self.gain_range
         scale_kp = torch.clamp(scale_kp, min=0.05, max=5.0)
         scale_kd = 1.0 + self.actions[:, 6:12] * self.gain_range
         scale_kd = torch.clamp(scale_kd, min=0.05, max=5.0)
-        # Learned soft switch (user decision 2026-10-06): the extra action dim drives
-        # alpha, so the policy decides WHEN to become compliant instead of the env's
-        # contact threshold. Rate-limited to switch_duration_s at policy rate.
-        if getattr(self.cfg.task, "switch_mode", "contact") == "learned":
+        # Learned soft switch: the 13th action drives alpha (rate-limited to
+        # switch_duration_s at policy rate). Non-segmented baselines (B1/B2) have no
+        # alpha, so it stays 0. A4 disables the rate limit (alpha jumps).
+        if getattr(self.cfg.task, "switch_mode", "contact") == "learned" and _mv not in {"b1_rl_varimp", "b2_residual"}:
             _a = (0.5 * (self.actions[:, 12] + 1.0)).clamp(0.0, 1.0)
-            _dl = min(1.0, self.physics_dt / max(self.cfg.task.switch_duration_s, 1e-3))
+            if _mv == "a4_no_ratelimit":
+                _dl = 1.0
+            else:
+                _dl = min(1.0, self.physics_dt / max(self.cfg.task.switch_duration_s, 1e-3))
             self._stage_alpha = self._stage_alpha + (_a - self._stage_alpha).clamp(-_dl, _dl)
             self._contact_alpha = self._stage_alpha
 
@@ -367,8 +371,13 @@ class OruEnv(DirectRLEnv):
         ee_angvel_now = self.ee_angvel
 
         # Contact-confirmed force cap ramps for every method, including baselines.
+        # B1/B2 (no alpha) and A3 (force constraint removed) keep a constant cap.
         task = self.cfg.task
-        z_force_limit = task.max_task_force + (task.max_task_force_z - task.max_task_force) * self._contact_alpha
+        _mv2 = getattr(task, "method_variant", "ours")
+        if _mv2 in {"b1_rl_varimp", "b2_residual", "a3_no_forcecap"}:
+            z_force_limit = task.max_task_force_z
+        else:
+            z_force_limit = task.max_task_force + (task.max_task_force_z - task.max_task_force) * self._contact_alpha
 
         joint_torque, self.applied_wrench = oru_control.compute_dof_torque(
             cfg=self.cfg,
@@ -695,8 +704,13 @@ class OruEnv(DirectRLEnv):
         self.stage2_reward = r_stage2
         self.stage_blend = contact_degree
 
+        _mv3 = getattr(self.cfg.task, "method_variant", "ours")
         method = self.cfg.task.experiment_method
-        if method == "single":
+        if _mv3 == "a2_no_stage1":
+            r_stage1 = torch.zeros_like(r_stage1)   # A2: remove stage-1 guidance
+        if _mv3 in {"b1_rl_varimp", "b2_residual"}:
+            rew = r_stage1 + r_stage2               # B1/B2: single (non-segmented) reward
+        elif method == "single":
             rew = r_stage1
         elif method == "no_stage":
             weight = self.cfg.task.fixed_stage_weight
@@ -708,7 +722,8 @@ class OruEnv(DirectRLEnv):
         rew += self._alignment_reward()  # common term, paid exactly once
 
         task = self.cfg.task
-        rew -= task.force_peak_weight * torch.relu(self._get_measured_force_mag() - task.force_peak_threshold) ** 2
+        if _mv3 != "a3_no_forcecap":   # A3: remove the continuous force-peak penalty
+            rew -= task.force_peak_weight * torch.relu(self._get_measured_force_mag() - task.force_peak_threshold) ** 2
 
         # Action penalties (all methods)
         rew -= self.cfg.task.action_penalty_scale * torch.norm(self.actions, p=2, dim=-1)
@@ -732,7 +747,7 @@ class OruEnv(DirectRLEnv):
         _rb = self.reset_buf.nonzero(as_tuple=False).flatten()
         if len(_rb) > 0:
             # one-off tail penalty on this episode's PEAK force (see the task config)
-            if getattr(task, "force_peak_budget", -1.0) > 0:
+            if getattr(task, "force_peak_budget", -1.0) > 0 and _mv3 != "a3_no_forcecap":
                 _pen = torch.zeros_like(rew)
                 _pen[_rb] = task.force_peak_penalty * torch.clamp(
                     self._ep_fmax[_rb] - task.force_peak_budget, min=0.0)

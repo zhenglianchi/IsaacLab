@@ -332,6 +332,22 @@ class OruTaskCfg:
     # trigger, which is the ablation baseline (and the only one that needs the contact
     # sensor, which does not exist on the real robot).
     switch_mode: str = "learned"
+    # ── Method variant (comparison / ablation switch) ────────────────
+    # Selects the algorithm to reproduce or ablate while keeping the same env,
+    # observation and canonical regime. Branches are implemented in oru_env.py.
+    #   "ours"            : 本文方法（13 维：12 增益 + 学习 α；分段奖励 + 力上限）
+    #   "b1_rl_varimp"    : B1 无分段 RL 变阻抗（12 维增益，单一奖励，无 α/无力上限）
+    #   "b2_residual"     : B2 残差导纳策略（基础增益 + 策略残差修正，单一奖励）
+    #   "b4_twostage"     : B4 两阶段（接近/插入硬切，各自奖励）
+    #   "a2_no_stage1"    : A2 去除阶段 1（删几何引导 r1）
+    #   "a3_no_forcecap"  : A3 去除阶段 2 力约束（删力上限与力峰值惩罚）
+    #   "a4_no_ratelimit" : A4 去速率受限（α 直接跳变，不经过渡）
+    #   "a5_no_gain"      : A5 去增益缩放（固定基础增益，只学 α）
+    method_variant: str = "ours"
+    # 细分开关（由 oru_env 按 method_variant 读取）
+    disable_stage1_reward: bool = False   # A2: 关闭阶段1几何引导奖励 r1
+    disable_stage2_force: bool = False    # A3: 关闭阶段2力约束（力上限+力峰值惩罚）
+    residual_gain_mode: bool = False      # B2: 增益 = 基础 + 残差（而非 基础*(1+a*g)）
     # 2026-10-13: demo/baseline mode. When True the policy output is replaced by zeros,
     # which reproduces the fixed-impedance baseline C0 in exactly the same scene.
     force_zero_action: bool = False
