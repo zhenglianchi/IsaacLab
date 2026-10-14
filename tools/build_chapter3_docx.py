@@ -41,6 +41,7 @@ def eq(t):
     return q
 
 from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 
 def _m(tag):
     return OxmlElement('m:' + tag)
