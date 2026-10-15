@@ -63,6 +63,20 @@ def _fuzzy_two_layer(progress, force_mag, cfg):
     return (float(getattr(cfg, "fuzzy_eff_scale", 2.0)) * mu_eff
             + float(getattr(cfg, "fuzzy_safe_scale", 0.02)) * mu_safe)
 
+
+def _extreme_cases(device):
+    """64 组极限工况：8 个姿态组合(±3°) × 8 个位置组合(x∈{-12,0}, y∈{∓12}, z∈{0,-12} cm)。"""
+    import itertools
+    xs = [-0.12, 0.0]
+    ys = [-0.12, 0.12]
+    zs = [-0.12, 0.0]
+    angs = [-0.0524, 0.0524]
+    rows = []
+    for (rx, ry, rz) in itertools.product(angs, repeat=3):
+        for (x, y, z) in itertools.product(xs, ys, zs):
+            rows.append([x, y, z, rx, ry, rz])
+    return torch.tensor(rows, device=device, dtype=torch.float32)
+
 class OruEnv(DirectRLEnv):
     """ORU Assembly — UR5 inserts pre-grasped ORU onto docking surface."""
 
@@ -1005,6 +1019,11 @@ class OruEnv(DirectRLEnv):
             else:
                 pos_noise = (2 * torch.rand(n, 3, device=self.device) - 1) * torch.tensor(task.ik_rand_pos_noise, device=self.device)
             rot_noise = (2 * torch.rand(n, 3, device=self.device) - 1) * torch.tensor(task.ik_rand_rot_noise, device=self.device)
+        # 极限工况评估：环境 i ↔ 第 i 个边界组合（覆盖上面的随机采样）
+        if getattr(task, "extreme_sweep", False):
+            _sel = _extreme_cases(self.device)[env_ids % 64]
+            pos_noise = _sel[:, :3]
+            rot_noise = _sel[:, 3:6]
         # Optional constant vertical bias of the start height (see the task config).
         # Applied AFTER sampling so the x/y randomization stays intact.
         _zoff = getattr(task, "start_z_offset", 0.0)

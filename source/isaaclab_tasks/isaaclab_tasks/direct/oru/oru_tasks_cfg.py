@@ -328,6 +328,8 @@ class OruTaskCfg:
     # B2 残差策略：标称控制器固定，策略只输出有界残差修正（±residual_range）
     residual_range: float = 0.3
     # B1 两层模糊奖励（复现 TD3-PER-CCL 的 two-layer fuzzy reward）
+    # 极限工况评估：环境 i 使用第 i 个边界组合（64 组 = 8 姿态 × 8 位置），覆盖随机化
+    extreme_sweep: bool = False
     fuzzy_reward_enable: bool = True
     fuzzy_eff_breakpoints: tuple = (0.0, 0.5, 1.0)
     fuzzy_eff_weights: tuple = (0.2, 0.5, 1.0)
