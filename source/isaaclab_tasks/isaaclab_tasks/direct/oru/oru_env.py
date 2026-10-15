@@ -38,6 +38,31 @@ from . import oru_control, oru_utils, oru_logic
 from .oru_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG, OruEnvCfg
 
 
+
+def _fuzzy_tri(x, a, b, c):
+    """三角形隶属度：峰值在 b，支撑 [a, c]。"""
+    return torch.clamp(torch.minimum((x - a) / max(b - a, 1e-6), (c - x) / max(c - b, 1e-6)), 0.0, 1.0)
+
+
+def _fuzzy_two_layer(progress, force_mag, cfg):
+    """两层模糊奖励：层1 插入效率（进度隶属）+ 层2 交互安全（腕部力隶属）。"""
+    bp_e = list(getattr(cfg, "fuzzy_eff_breakpoints", (0.0, 0.5, 1.0)))
+    w_e = list(getattr(cfg, "fuzzy_eff_weights", (0.2, 0.5, 1.0)))
+    mu_eff = torch.zeros_like(progress)
+    for i, b in enumerate(bp_e):
+        a = bp_e[i - 1] if i > 0 else bp_e[0]
+        c = bp_e[i + 1] if i < len(bp_e) - 1 else bp_e[-1]
+        mu_eff = mu_eff + w_e[i] * _fuzzy_tri(progress, a, b, c)
+    bp_s = list(getattr(cfg, "fuzzy_safe_breakpoints", (0.0, 25.0, 45.0, 60.0)))
+    w_s = list(getattr(cfg, "fuzzy_safe_weights", (1.0, 0.3, -1.0, -2.0)))
+    mu_safe = torch.zeros_like(force_mag)
+    for i, b in enumerate(bp_s):
+        a = bp_s[i - 1] if i > 0 else bp_s[0]
+        c = bp_s[i + 1] if i < len(bp_s) - 1 else bp_s[-1] + 1e6
+        mu_safe = mu_safe + w_s[i] * _fuzzy_tri(force_mag, a, b, c)
+    return (float(getattr(cfg, "fuzzy_eff_scale", 2.0)) * mu_eff
+            + float(getattr(cfg, "fuzzy_safe_scale", 0.02)) * mu_safe)
+
 class OruEnv(DirectRLEnv):
     """ORU Assembly — UR5 inserts pre-grasped ORU onto docking surface."""
 
@@ -176,12 +201,19 @@ class OruEnv(DirectRLEnv):
         self._ep_tauz = torch.zeros(N, device=self.device)
         self._ep_fw = torch.zeros(N, device=self.device)
         self._ep_fwz = torch.zeros(N, device=self.device)
+        # 2026-10-14(用户要求): 腕部六维分力的逐回合峰值（3 力 + 3 力矩）
+        self._ep_fx = torch.zeros(N, device=self.device)
+        self._ep_fy = torch.zeros(N, device=self.device)
+        self._ep_mx = torch.zeros(N, device=self.device)
+        self._ep_my = torch.zeros(N, device=self.device)
         self._ep_touch = torch.zeros(N, dtype=torch.bool, device=self.device)
         self._ep_metrics_path = 'logs/oru_episode_metrics.csv'
         _mp = pathlib.Path(self._ep_metrics_path)
         _mp.parent.mkdir(parents=True, exist_ok=True)
         if not _mp.exists():
-            _mp.write_text('step,env,success,steps,force_peak_N,contact_flips,attitude_rms_rad,angspd_rms_rad_s,wrist_tau_peak_Nm,wrist_fxy_peak_N,wrist_tauz_peak_Nm,wrist_f_peak_N,wrist_fz_peak_N\n', encoding='utf-8')
+            _mp.write_text('step,env,success,steps,attitude_rms_rad,angspd_rms_rad_s,'
+                              'wrist_F_max_N,wrist_Fx_max_N,wrist_Fy_max_N,wrist_Fz_max_N,'
+                              'wrist_Mx_max_Nm,wrist_My_max_Nm,wrist_Mz_max_Nm\n', encoding='utf-8')
         # Geometry-only seat latch (no velocity gate). Drives the controller freeze:
         # freezing on the full seat test is circular, because the bounce that the
         # control force causes is exactly what keeps the velocity gates unsatisfied.
@@ -287,14 +319,34 @@ class OruEnv(DirectRLEnv):
 
         _mv = getattr(self.cfg.task, "method_variant", "ours")
         # ── Actions: [:6]=Kp scale, [6:]=Kd scale ──
-        scale_kp = 1.0 + self.actions[:, 0:6] * self.gain_range
-        scale_kp = torch.clamp(scale_kp, min=0.05, max=5.0)
-        scale_kd = 1.0 + self.actions[:, 6:12] * self.gain_range
-        scale_kd = torch.clamp(scale_kd, min=0.05, max=5.0)
+        if _mv == "b4_twostage":
+            # B4（结构化复现文献的“粗调 + 精调”两阶段）：
+            #   粗调阶段（轴孔未接触）：不使用策略，采用固定标称增益（非 RL 引导）
+            #   精调阶段（接触后）：由策略输出增益，实现阻抗参数在线调整
+            _f = self._insertion_phase.float().unsqueeze(-1)     # (N,1)，True=已接触
+            _kp_act = self.actions[:, 0:6] * self.gain_range
+            _kd_act = self.actions[:, 6:12] * self.gain_range
+            scale_kp = torch.clamp(1.0 + _f * _kp_act, min=0.05, max=5.0)
+            scale_kd = torch.clamp(1.0 + _f * _kd_act, min=0.05, max=5.0)
+        elif _mv == "b2_residual":
+            # B2 真残差策略：标称控制器固定，策略输出有界残差修正（Kp/Kd 各 ±residual_range）
+            _rr = float(getattr(self.cfg.task, "residual_range", 0.3))
+            scale_kp = torch.clamp(1.0 + self.actions[:, 0:6] * _rr, min=0.05, max=5.0)
+            scale_kd = torch.clamp(1.0 + self.actions[:, 6:12] * _rr, min=0.05, max=5.0)
+        elif _mv == "b1_rl_varimp":
+            # B1 复现“强化学习自适应虚拟阻尼”：刚度固定在基础值，策略只学阻尼（6 维动作）
+            scale_kp = torch.ones_like(self.actions[:, 0:6])
+            scale_kd = 1.0 + self.actions[:, 0:6] * self.gain_range
+            scale_kd = torch.clamp(scale_kd, min=0.05, max=5.0)
+        else:
+            scale_kp = 1.0 + self.actions[:, 0:6] * self.gain_range
+            scale_kp = torch.clamp(scale_kp, min=0.05, max=5.0)
+            scale_kd = 1.0 + self.actions[:, 6:12] * self.gain_range
+            scale_kd = torch.clamp(scale_kd, min=0.05, max=5.0)
         # Learned soft switch: the 13th action drives alpha (rate-limited to
         # switch_duration_s at policy rate). Non-segmented baselines (B1/B2) have no
         # alpha, so it stays 0. A4 disables the rate limit (alpha jumps).
-        if getattr(self.cfg.task, "switch_mode", "contact") == "learned" and _mv not in {"b1_rl_varimp", "b2_residual"}:
+        if getattr(self.cfg.task, "switch_mode", "contact") == "learned" and _mv not in {"b1_rl_varimp", "b2_residual", "b4_twostage"}:
             _a = (0.5 * (self.actions[:, 12] + 1.0)).clamp(0.0, 1.0)
             if _mv == "a4_no_ratelimit":
                 _dl = 1.0
@@ -540,6 +592,12 @@ class OruEnv(DirectRLEnv):
         self._ep_tauz = torch.maximum(self._ep_tauz, _tw[:, 2].abs())
         self._ep_fw = torch.maximum(self._ep_fw, torch.linalg.vector_norm(_fw, dim=-1))
         self._ep_fwz = torch.maximum(self._ep_fwz, _fw[:, 2].abs())
+        # 腕部六维分力（峰值取绝对值最大）
+        self._ep_fx = torch.maximum(self._ep_fx, _fw[:, 0].abs())
+        self._ep_fy = torch.maximum(self._ep_fy, _fw[:, 1].abs())
+        _mw = _wb[:, 3:6]
+        self._ep_mx = torch.maximum(self._ep_mx, _mw[:, 0].abs())
+        self._ep_my = torch.maximum(self._ep_my, _mw[:, 1].abs())
         (self._insertion_phase, self._entry_count, self._was_in_contact,
          self._contact_count, self._stage_alpha, self._contact_alpha,
          self._can_advance) = oru_logic.update_phase(
@@ -681,7 +739,7 @@ class OruEnv(DirectRLEnv):
                 _a = float(self._stage_alpha.mean().item())
                 _wr = _w[:, 0:3].norm(dim=-1)
                 _wt = _w[:, 3:6].norm(dim=-1)
-                _g = self.actions[:, 0:12].mean(dim=0).detach().cpu().tolist()
+                _g = self.actions[:, 0:min(12, self.actions.shape[1])].mean(dim=0).detach().cpu().tolist()
                 _f.write("%d,%d,%.6f,%.6f,%.6f,%.4f,%.4f,%.4f,%s\n" % (
                     0, self._trace_step, _gap, _xy, _a, float(_wr.mean()), float(_wt.mean()),
                     8.0 + 52.0 * _a, ",".join("%.5f" % v for v in _g)))
@@ -722,7 +780,11 @@ class OruEnv(DirectRLEnv):
         rew += self._alignment_reward()  # common term, paid exactly once
 
         task = self.cfg.task
-        if _mv3 != "a3_no_forcecap":   # A3: remove the continuous force-peak penalty
+        if _mv3 == "b1_rl_varimp" and getattr(task, "fuzzy_reward_enable", False):
+            _gap = self._oru_pose_errors()[1]
+            _prog = torch.clamp(1.0 - _gap.abs() / max(float(getattr(task, "success_z", 0.4298)), 1e-6), 0.0, 1.0)
+            rew = rew + _fuzzy_two_layer(_prog, self._get_measured_force_mag(), task)
+        elif _mv3 != "a3_no_forcecap":   # A3: remove the continuous force-peak penalty
             rew -= task.force_peak_weight * torch.relu(self._get_measured_force_mag() - task.force_peak_threshold) ** 2
 
         # Action penalties (all methods)
@@ -747,7 +809,7 @@ class OruEnv(DirectRLEnv):
         _rb = self.reset_buf.nonzero(as_tuple=False).flatten()
         if len(_rb) > 0:
             # one-off tail penalty on this episode's PEAK force (see the task config)
-            if getattr(task, "force_peak_budget", -1.0) > 0 and _mv3 != "a3_no_forcecap":
+            if getattr(task, "force_peak_budget", -1.0) > 0 and _mv3 not in ("a3_no_forcecap", "b1_rl_varimp"):
                 _pen = torch.zeros_like(rew)
                 _pen[_rb] = task.force_peak_penalty * torch.clamp(
                     self._ep_fmax[_rb] - task.force_peak_budget, min=0.0)
@@ -755,16 +817,18 @@ class OruEnv(DirectRLEnv):
             with open(self._ep_metrics_path, 'a', encoding='utf-8') as _fh:
                 for _e in _rb.tolist():
                     _n = max(int(self._ep_steps[_e].item()), 1)
+                    # 列顺序必须与上面的表头严格一致（13 列）
                     _fh.write(','.join(str(x) for x in (
                         int(self.common_step_counter), _e, int(bool(self.ep_succeeded[_e].item())), _n,
-                        round(float(self._ep_fmax[_e].item()), 3), int(self._ep_flips[_e].item()),
                         round((float(self._ep_ang2[_e].item()) / _n) ** 0.5, 5),
                         round((float(self._ep_angspd2[_e].item()) / _n) ** 0.5, 5),
-                        round(float(self._ep_tau[_e].item()), 4),
-                        round(float(self._ep_fxy[_e].item()), 3),
-                        round(float(self._ep_tauz[_e].item()), 4),
-                        round(float(self._ep_fw[_e].item()), 3),
-                        round(float(self._ep_fwz[_e].item()), 3))) + '\n')
+                        round(float(self._ep_fw[_e].item()), 3),      # |F| 峰值
+                        round(float(self._ep_fx[_e].item()), 3),      # |Fx|
+                        round(float(self._ep_fy[_e].item()), 3),      # |Fy|
+                        round(float(self._ep_fwz[_e].item()), 3),     # |Fz|
+                        round(float(self._ep_mx[_e].item()), 4),      # |Mx|
+                        round(float(self._ep_my[_e].item()), 4),      # |My|
+                        round(float(self._ep_tauz[_e].item()), 4))) + '\n')   # |Mz|
             self._ep_fmax[_rb] = 0.0
             self._ep_flips[_rb] = 0.0
             self._ep_ang2[_rb] = 0.0
@@ -779,6 +843,10 @@ class OruEnv(DirectRLEnv):
             self._ep_tauz[_rb] = 0.0
             self._ep_fw[_rb] = 0.0
             self._ep_fwz[_rb] = 0.0
+            self._ep_fx[_rb] = 0.0
+            self._ep_fy[_rb] = 0.0
+            self._ep_mx[_rb] = 0.0
+            self._ep_my[_rb] = 0.0
         self.extras["rew_pos_error"] = torch.norm(self.ee_pos - target_ref_pos, dim=-1).mean()
         self.extras["rew_contact_degree"] = contact_degree.mean()
         # Global scale applied here (not in rl_games' reward_shaper) so that the reward

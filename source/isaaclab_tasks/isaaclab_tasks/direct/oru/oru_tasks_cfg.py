@@ -325,6 +325,16 @@ class OruTaskCfg:
     # Action[6:]  → Kd = base_Kd * (1 + a * gain_range)
     # Clamped to [5%, 500%] of base.
     gain_range: float = 0.5
+    # B2 残差策略：标称控制器固定，策略只输出有界残差修正（±residual_range）
+    residual_range: float = 0.3
+    # B1 两层模糊奖励（复现 TD3-PER-CCL 的 two-layer fuzzy reward）
+    fuzzy_reward_enable: bool = True
+    fuzzy_eff_breakpoints: tuple = (0.0, 0.5, 1.0)
+    fuzzy_eff_weights: tuple = (0.2, 0.5, 1.0)
+    fuzzy_safe_breakpoints: tuple = (0.0, 25.0, 45.0, 60.0)
+    fuzzy_safe_weights: tuple = (1.0, 0.3, -1.0, -2.0)
+    fuzzy_eff_scale: float = 2.0
+    fuzzy_safe_scale: float = 0.02
     # 2026-10-06 (routes B/D): let the policy LEARN the soft switch instead of the
     # hand-designed contact trigger. With "learned" the 13th action is mapped to
     # alpha in [0,1] and drives BOTH the reward blend and the Z force cap, so "when to
